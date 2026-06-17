@@ -16,6 +16,134 @@ let currentProjectId = null;
 // Helper: Save current state to localStorage
 function saveState() {
   localStorage.setItem('tracker_state', JSON.stringify(state));
+  autoSaveExcelLocal();
+}
+
+// Generate XLSX Workbook from current state
+function generateWorkbookData() {
+  const wb = XLSX.utils.book_new();
+  
+  // 1. Projects Sheet
+  const projectRows = state.projects.map(p => ({
+    'Project id': p.ID,
+    'Project Name': p.Name,
+    'Project Description': p.Description,
+    'Project Planned Start Date': p.PlannedStartDate || '',
+    'Project Planned End Date': p.PlannedEndDate || '',
+    'Project Budget': p.Budget,
+    'Project Spent': p.Spent,
+    'Project Manager': p.ProjectManager,
+    'Department': p.Department,
+    'Project Status': p.Status,
+    'Project Actual Start Date': p.ActualStartDate || '',
+    'Project Actual End Date': p.ActualEndDate || '',
+    'Project Progress': p.Progress
+  }));
+  
+  // 2. Tasks Sheet
+  const taskRows = state.tasks.map(t => ({
+    'Project id': t.ProjectID,
+    'Task Id': t.ID,
+    'Task Name': t.Name,
+    'Task Planned Start Date': t.PlannedStartDate || t.StartDate || '',
+    'Task Planned End Date': t.PlannedEndDate || t.EndDate || '',
+    'Task Actual Start Date': t.ActualStartDate || '',
+    'Task Actual End Date': t.ActualEndDate || '',
+    'Task Assignee': t.Assignee || '',
+    'Task Status': t.Status || '',
+    'Task Days Delayed': t.DaysDelayed || 0,
+    'Task Delay Reason': t.DelayReason || '',
+    'Task Delay Impact': t.DelayImpact || '',
+    'Task Delay Reported By': t.DelayReportedBy || '',
+    'Task Progress': t.Progress
+  }));
+  
+  // 3. Team Members Sheet
+  const memberRows = state.teamMembers.map(m => ({
+    'id': m.id || m.ID || '',
+    'name': m.name || '',
+    'role': m.role || '',
+    'department': m.department || ''
+  }));
+
+  const wsProjects = XLSX.utils.json_to_sheet(projectRows);
+  const wsTasks = XLSX.utils.json_to_sheet(taskRows);
+  const wsMembers = XLSX.utils.json_to_sheet(memberRows);
+
+  XLSX.utils.book_append_sheet(wb, wsProjects, 'Project Details');
+  XLSX.utils.book_append_sheet(wb, wsTasks, 'Tasks');
+  XLSX.utils.book_append_sheet(wb, wsMembers, 'TeamMembers');
+
+  return wb;
+}
+
+// Auto-save to local Excel file via local backend API
+async function autoSaveExcelLocal() {
+  try {
+    const wb = generateWorkbookData();
+    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'base64' });
+    
+    const response = await fetch('/api/save-database', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ fileData: wbout })
+    });
+    
+    if (response.ok) {
+      console.log('Autosaved database.xlsx successfully!');
+      showAutoSaveToast();
+    } else {
+      console.warn('Local database autosave failed (server offline/error).');
+    }
+  } catch (err) {
+    console.warn('Local database autosave failed:', err);
+  }
+}
+
+// Display auto-saved toast notification
+function showAutoSaveToast() {
+  let toast = document.getElementById('autosave-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'autosave-toast';
+    toast.style.cssText = `
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background-color: var(--bg-tertiary);
+      border: 1px solid var(--color-success);
+      color: var(--text-primary);
+      padding: 12px 18px;
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-lg);
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      z-index: 1000;
+      opacity: 0;
+      transform: translateY(10px);
+      transition: opacity 0.3s ease, transform 0.3s ease;
+      pointer-events: none;
+    `;
+    toast.innerHTML = `
+      <i data-lucide="check-circle" style="width:16px; height:16px; color:var(--color-success);"></i>
+      <span>Autosaved to database.xlsx</span>
+    `;
+    document.body.appendChild(toast);
+    lucide.createIcons();
+  }
+  
+  toast.style.opacity = '1';
+  toast.style.transform = 'translateY(0)';
+  
+  if (toast.timeoutId) clearTimeout(toast.timeoutId);
+  toast.timeoutId = setTimeout(() => {
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateY(10px)';
+  }, 2500);
 }
 
 // Format Currency
@@ -1505,59 +1633,7 @@ function setupEventListeners() {
   // Export Excel
   document.getElementById('btn-export-excel').addEventListener('click', () => {
     try {
-      const wb = XLSX.utils.book_new();
-      
-      // 1. Projects Sheet
-      const projectRows = state.projects.map(p => ({
-        'Project id': p.ID,
-        'Project Name': p.Name,
-        'Project Description': p.Description,
-        'Project Planned Start Date': p.PlannedStartDate || '',
-        'Project Planned End Date': p.PlannedEndDate || '',
-        'Project Budget': p.Budget,
-        'Project Spent': p.Spent,
-        'Project Manager': p.ProjectManager,
-        'Department': p.Department,
-        'Project Status': p.Status,
-        'Project Actual Start Date': p.ActualStartDate || '',
-        'Project Actual End Date': p.ActualEndDate || '',
-        'Project Progress': p.Progress
-      }));
-      
-      // 2. Tasks Sheet
-      const taskRows = state.tasks.map(t => ({
-        'Project id': t.ProjectID,
-        'Task Id': t.ID,
-        'Task Name': t.Name,
-        'Task Planned Start Date': t.PlannedStartDate || t.StartDate || '',
-        'Task Planned End Date': t.PlannedEndDate || t.EndDate || '',
-        'Task Actual Start Date': t.ActualStartDate || '',
-        'Task Actual End Date': t.ActualEndDate || '',
-        'Task Assignee': t.Assignee || '',
-        'Task Status': t.Status || '',
-        'Task Days Delayed': t.DaysDelayed || 0,
-        'Task Delay Reason': t.DelayReason || '',
-        'Task Delay Impact': t.DelayImpact || '',
-        'Task Delay Reported By': t.DelayReportedBy || '',
-        'Task Progress': t.Progress
-      }));
-      
-      // 3. Team Members Sheet
-      const memberRows = state.teamMembers.map(m => ({
-        'id': m.id || m.ID || '',
-        'name': m.name || '',
-        'role': m.role || '',
-        'department': m.department || ''
-      }));
-
-      const wsProjects = XLSX.utils.json_to_sheet(projectRows);
-      const wsTasks = XLSX.utils.json_to_sheet(taskRows);
-      const wsMembers = XLSX.utils.json_to_sheet(memberRows);
-
-      XLSX.utils.book_append_sheet(wb, wsProjects, 'Project Details');
-      XLSX.utils.book_append_sheet(wb, wsTasks, 'Tasks');
-      XLSX.utils.book_append_sheet(wb, wsMembers, 'TeamMembers');
-
+      const wb = generateWorkbookData();
       XLSX.writeFile(wb, 'database.xlsx');
       alert('Database exported successfully as database.xlsx! Overwrite the old database.xlsx in your workspace to persist it permanently.');
     } catch (err) {
