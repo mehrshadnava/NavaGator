@@ -20,7 +20,7 @@ function saveState() {
 
 // Format Currency
 function formatCurrency(amount) {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(amount);
+  return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(amount);
 }
 
 // Format Date string to human readable format
@@ -66,94 +66,170 @@ async function loadData() {
   initUI();
 }
 
-function parseExcelData(workbook) {
-  const sheetProjectsTasks = workbook.Sheets['ProjectsAndTasks'];
-  const sheetMembers = workbook.Sheets['TeamMembers'] || workbook.Sheets['Users'];
-
-  if (!sheetProjectsTasks || !sheetMembers) {
-    throw new Error('Missing worksheets! Make sure the Excel workbook has ProjectsAndTasks and TeamMembers sheets.');
+// Helper: Get object property case-insensitively and space-insensitively
+function getProp(obj, keys) {
+  if (!obj) return undefined;
+  for (const k of keys) {
+    if (obj[k] !== undefined) return obj[k];
+    const cleanK = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+    for (const key of Object.keys(obj)) {
+      const cleanKey = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (cleanK === cleanKey) return obj[key];
+    }
   }
+  return undefined;
+}
 
-  const rows = XLSX.utils.sheet_to_json(sheetProjectsTasks) || [];
-  const members = XLSX.utils.sheet_to_json(sheetMembers) || [];
-
-  const projectsMap = new Map();
-  const tasksMap = new Map();
-  const delaysMap = new Map();
-
-  rows.forEach((row, index) => {
-    const projId = String(row.ProjectID || row.ProjectId || '');
-    if (!projId) return;
-
-    // 1. Process Project
-    if (!projectsMap.has(projId)) {
-      projectsMap.set(projId, {
-        ID: projId,
-        Name: row.ProjectName || '',
-        Description: row.ProjectDescription || '',
-        Department: row.Department || '',
-        Status: row.ProjectStatus || 'on-track',
-        Budget: Number(row.Budget || 0),
-        Spent: Number(row.Spent || 0),
-        PlannedStartDate: row.ProjectPlannedStartDate || row.ProjectStartDate || row.StartDate || '',
-        PlannedEndDate: row.ProjectPlannedEndDate || row.ProjectEndDate || row.EndDate || '',
-        ActualStartDate: row.ProjectActualStartDate || '',
-        ActualEndDate: row.ProjectActualEndDate || '',
-        DaysDelayed: 0, // Will be computed
-        ProjectManager: row.ProjectManager || '',
-        Progress: 0 // Will be computed
-      });
+// Helper: Sort Task IDs hierarchically (e.g. 1, 1.1, 1.1.1, 2, 2.1)
+function compareTaskIds(idA, idB) {
+  const partsA = String(idA).split('.').map(Number);
+  const partsB = String(idB).split('.').map(Number);
+  const maxLen = Math.max(partsA.length, partsB.length);
+  for (let i = 0; i < maxLen; i++) {
+    const valA = isNaN(partsA[i]) ? 0 : partsA[i];
+    const valB = isNaN(partsB[i]) ? 0 : partsB[i];
+    if (valA !== valB) {
+      return valA - valB;
     }
+  }
+  return String(idA).localeCompare(String(idB));
+}
 
-    // 2. Process Task
-    const taskId = String(row.TaskID || row.TaskId || '');
-    if (taskId) {
-      if (!tasksMap.has(taskId)) {
-        tasksMap.set(taskId, {
-          ID: taskId,
-          ProjectID: projId,
-          Name: row.TaskName || '',
-          StartDate: row.TaskStartDate || '',
-          EndDate: row.TaskEndDate || '',
-          Progress: Number(row.TaskProgress || 0),
-          Status: row.TaskStatus || 'not-started',
-          Assignee: row.TaskAssignee || ''
-        });
+// Helper: Roll up task progress and status from bottom of hierarchy to top
+function rollupProjectTasks(projectId) {
+  const projectTasks = state.tasks.filter(t => t.ProjectID === projectId);
+  
+  // Sort from deepest level to shallowest level
+  const sortedTasks = [...projectTasks].sort((a, b) => {
+    const depthA = String(a.ID).split('.').length;
+    const depthB = String(b.ID).split('.').length;
+    return depthB - depthA;
+  });
+  
+  sortedTasks.forEach(parent => {
+    const children = projectTasks.filter(child => {
+      const parentParts = String(parent.ID).split('.');
+      const childParts = String(child.ID).split('.');
+      if (childParts.length === parentParts.length + 1) {
+        return childParts.slice(0, parentParts.length).join('.') === parent.ID;
       }
-    }
-
-    // 3. Process Delay
-    const delayReason = row.DelayReason || '';
-    const delayDays = Number(row.DelayDays || 0);
-    if (delayReason || delayDays > 0) {
-      const delayId = `d_${projId}_${taskId || index}`;
-      if (!delaysMap.has(delayId)) {
-        delaysMap.set(delayId, {
-          ID: delayId,
-          ProjectID: projId,
-          Date: row.TaskStartDate || new Date().toISOString().split('T')[0],
-          Reason: delayReason,
-          Impact: row.DelayImpact || '',
-          ReportedBy: row.DelayReportedBy || row.ProjectManager || '',
-          DaysDelayed: delayDays
-        });
+      return false;
+    });
+    
+    if (children.length > 0) {
+      const totalProgress = children.reduce((sum, child) => sum + (child.Progress || 0), 0);
+      parent.Progress = Math.round(totalProgress / children.length);
+      
+      if (parent.Progress === 100) {
+        parent.Status = 'completed';
+      } else if (parent.Progress > 0) {
+        parent.Status = 'in-progress';
+      } else {
+        parent.Status = 'not-started';
+      }
+      
+      if (children.some(child => child.Status === 'blocked')) {
+        parent.Status = 'blocked';
       }
     }
   });
+}
 
-  state.projects = Array.from(projectsMap.values());
-  state.tasks = Array.from(tasksMap.values());
-  state.delays = Array.from(delaysMap.values());
+function parseExcelData(workbook) {
+  // Find project details sheet
+  const projectSheetName = workbook.SheetNames.find(name => 
+    name.toLowerCase().includes('project details') || 
+    name.toLowerCase().includes('projectdetails') || 
+    name.toLowerCase() === 'projects'
+  ) || workbook.SheetNames[0];
+
+  // Find tasks sheet
+  const tasksSheetName = workbook.SheetNames.find(name => 
+    name.toLowerCase() === 'tasks' || 
+    name.toLowerCase().includes('task')
+  ) || workbook.SheetNames[1];
+
+  // Find team members sheet
+  const membersSheetName = workbook.SheetNames.find(name => 
+    name.toLowerCase().includes('teammember') || 
+    name.toLowerCase().includes('team member') || 
+    name.toLowerCase().includes('user') ||
+    name.toLowerCase().includes('member')
+  );
+
+  const sheetProjects = workbook.Sheets[projectSheetName];
+  const sheetTasks = workbook.Sheets[tasksSheetName];
+  const sheetMembers = membersSheetName ? workbook.Sheets[membersSheetName] : null;
+
+  if (!sheetProjects || !sheetTasks) {
+    throw new Error('Missing worksheets! Make sure the Excel workbook has Project Details and Tasks sheets.');
+  }
+
+  const projectRows = XLSX.utils.sheet_to_json(sheetProjects) || [];
+  const taskRows = XLSX.utils.sheet_to_json(sheetTasks) || [];
+  const members = sheetMembers ? XLSX.utils.sheet_to_json(sheetMembers) : [];
+
+  state.projects = projectRows.map(row => {
+    const id = String(getProp(row, ['Project id', 'ProjectID', 'ID']) || '');
+    return {
+      ID: id,
+      Name: String(getProp(row, ['Project Name', 'ProjectName', 'Name']) || ''),
+      Description: String(getProp(row, ['Project Description', 'ProjectDescription', 'Description']) || ''),
+      Department: String(getProp(row, ['Department', 'Dept']) || 'steel'),
+      Status: String(getProp(row, ['Project Status', 'ProjectStatus', 'Status']) || 'on-track'),
+      Budget: Number(getProp(row, ['Project Budget', 'ProjectBudget', 'Budget']) || 0),
+      Spent: Number(getProp(row, ['Project Spent', 'ProjectSpent', 'Spent']) || 0),
+      PlannedStartDate: String(getProp(row, ['Project Planned Start Date', 'ProjectPlannedStartDate', 'PlannedStartDate', 'StartDate']) || ''),
+      PlannedEndDate: String(getProp(row, ['Project Planned End Date', 'ProjectPlannedEndDate', 'PlannedEndDate', 'EndDate']) || ''),
+      ActualStartDate: String(getProp(row, ['Project Actual Start Date', 'ProjectActualStartDate', 'ActualStartDate']) || ''),
+      ActualEndDate: String(getProp(row, ['Project Actual End Date', 'ProjectActualEndDate', 'ActualEndDate']) || ''),
+      DaysDelayed: Number(getProp(row, ['Project Days Delayed', 'ProjectDaysDelayed', 'DaysDelayed']) || 0),
+      ProjectManager: String(getProp(row, ['Project Manager', 'ProjectManager', 'Manager']) || ''),
+      Progress: Number(getProp(row, ['Project Progress', 'ProjectProgress', 'Progress']) || 0)
+    };
+  }).filter(p => p.ID);
+
+  state.tasks = taskRows.map(row => {
+    const projId = String(getProp(row, ['Project id', 'ProjectID']) || '');
+    const taskId = String(getProp(row, ['Task Id', 'TaskID', 'ID']) || '');
+    const daysDelayed = Number(getProp(row, ['Task Days Delayed', 'TaskDaysDelayed', 'DaysDelayed']) || 0);
+    const delayReason = String(getProp(row, ['Task Delay Reason', 'TaskDelayReason', 'DelayReason', 'Reason']) || '');
+    const delayImpact = String(getProp(row, ['Task Delay Impact', 'TaskDelayImpact', 'DelayImpact', 'Impact']) || '');
+    const delayReportedBy = String(getProp(row, ['Task Delay Reported By', 'TaskDelayReportedBy', 'DelayReportedBy', 'ReportedBy']) || '');
+    
+    return {
+      ID: taskId,
+      ProjectID: projId,
+      Name: String(getProp(row, ['Task Name', 'TaskName', 'Name']) || ''),
+      PlannedStartDate: String(getProp(row, ['Task Planned Start Date', 'TaskPlannedStartDate', 'StartDate', 'PlannedStartDate']) || ''),
+      PlannedEndDate: String(getProp(row, ['Task Planned End Date', 'TaskPlannedEndDate', 'EndDate', 'PlannedEndDate']) || ''),
+      ActualStartDate: String(getProp(row, ['Task Actual Start Date', 'TaskActualStartDate', 'ActualStartDate']) || ''),
+      ActualEndDate: String(getProp(row, ['Task Actual End Date', 'TaskActualEndDate', 'ActualEndDate']) || ''),
+      Assignee: String(getProp(row, ['Task Assignee', 'TaskAssignee', 'Assignee']) || ''),
+      Status: String(getProp(row, ['Task Status', 'TaskStatus', 'Status']) || 'not-started'),
+      Progress: Number(getProp(row, ['Task Progress', 'TaskProgress', 'Progress']) || 0),
+      DaysDelayed: daysDelayed,
+      DelayReason: delayReason,
+      DelayImpact: delayImpact,
+      DelayReportedBy: delayReportedBy
+    };
+  }).filter(t => t.ID && t.ProjectID);
+
   state.teamMembers = members;
 
   normalizeStateData();
   
   // Recalculate project progress, delays, and statuses
   state.projects.forEach(p => {
+    rollupProjectTasks(p.ID);
+    
     const pTasks = state.tasks.filter(t => t.ProjectID === p.ID);
     if (pTasks.length > 0) {
-      const sum = pTasks.reduce((s, t) => s + t.Progress, 0);
-      p.Progress = Math.round(sum / pTasks.length);
+      // average of level 0 tasks
+      const rootTasks = pTasks.filter(t => !String(t.ID).includes('.'));
+      const targetTasks = rootTasks.length > 0 ? rootTasks : pTasks;
+      const sum = targetTasks.reduce((s, t) => s + t.Progress, 0);
+      p.Progress = Math.round(sum / targetTasks.length);
     }
     calculateProjectDelaysAndStatus(p);
   });
@@ -171,35 +247,32 @@ function calculateProjectDelaysAndStatus(project) {
 
   let daysDelayed = 0;
 
-  // 1. Calculate delay in days
+  // 1. Calculate delay in days from dates
   if (actualEnd && plannedEnd) {
-    // Project is complete
     if (actualEnd > plannedEnd) {
       daysDelayed = Math.max(0, Math.round((actualEnd - plannedEnd) / (1000 * 60 * 60 * 24)));
     }
   } else if (actualStart) {
-    // Project is in progress
     if (plannedEnd && today > plannedEnd) {
-      // Exceeded planned end date
       daysDelayed = Math.max(0, Math.round((today - plannedEnd) / (1000 * 60 * 60 * 24)));
     } else if (plannedStart && actualStart > plannedStart) {
-      // Started late (carries over as a current delay)
       daysDelayed = Math.max(0, Math.round((actualStart - plannedStart) / (1000 * 60 * 60 * 24)));
     }
   } else {
-    // Project has not started
     if (plannedStart && today > plannedStart) {
-      // Exceeded planned start date without starting
       daysDelayed = Math.max(0, Math.round((today - plannedStart) / (1000 * 60 * 60 * 24)));
     }
   }
 
-  project.DaysDelayed = daysDelayed;
+  // Combine baseline delay with the sum of logged task delays
+  const projectTasks = state.tasks.filter(t => t.ProjectID === project.ID);
+  const totalLoggedTaskDelays = projectTasks.reduce((sum, t) => sum + (t.DaysDelayed || 0), 0);
+  project.DaysDelayed = Math.max(daysDelayed, totalLoggedTaskDelays);
 
   // Determine status automatically
   if (project.Progress === 100 || actualEnd) {
     project.Status = 'completed';
-  } else if (daysDelayed > 0) {
+  } else if (project.DaysDelayed > 0) {
     project.Status = 'delayed';
   } else if (project.Status !== 'at-risk') {
     project.Status = 'on-track';
@@ -222,15 +295,67 @@ function normalizeStateData() {
     t.Progress = Number(t.Progress || 0);
     t.ProjectID = String(t.ProjectID);
     t.ID = String(t.ID);
+    t.PlannedStartDate = t.PlannedStartDate || t.StartDate || '';
+    t.PlannedEndDate = t.PlannedEndDate || t.EndDate || '';
+    t.ActualStartDate = t.ActualStartDate || '';
+    t.ActualEndDate = t.ActualEndDate || '';
+    t.DaysDelayed = Number(t.DaysDelayed || 0);
   });
-  state.delays.forEach(d => {
-    d.ProjectID = String(d.ProjectID);
-    d.ID = String(d.ID);
-    d.DaysDelayed = Number(d.DaysDelayed || 0);
+  
+  // Re-build state.delays from task delays
+  const delays = [];
+  state.tasks.forEach(t => {
+    if (t.DaysDelayed > 0 || t.DelayReason) {
+      delays.push({
+        ID: `d_${t.ProjectID}_${t.ID}`,
+        ProjectID: t.ProjectID,
+        TaskID: t.ID,
+        Date: t.ActualStartDate || t.PlannedStartDate || new Date().toISOString().split('T')[0],
+        Reason: t.DelayReason,
+        Impact: t.DelayImpact,
+        ReportedBy: t.DelayReportedBy || 'Unknown',
+        DaysDelayed: t.DaysDelayed
+      });
+    }
   });
+  state.delays = delays;
+  
   state.teamMembers.forEach(m => {
-    m.id = String(m.id || m.ID || m.id || '');
+    m.id = String(m.id || m.ID || '');
   });
+
+  // Extract team members dynamically if the sheet was missing/empty
+  if (!state.teamMembers || state.teamMembers.length === 0) {
+    const uniqueMembers = new Set();
+    const extractedMembers = [];
+
+    const addMember = (name, role, department) => {
+      if (!name) return;
+      const cleanName = name.trim();
+      if (!cleanName || uniqueMembers.has(cleanName)) return;
+      uniqueMembers.add(cleanName);
+      
+      const memberId = 'tm' + (extractedMembers.length + 1);
+      extractedMembers.push({
+        id: memberId,
+        name: cleanName,
+        role: role,
+        department: department || 'steel'
+      });
+    };
+
+    state.projects.forEach(p => {
+      addMember(p.ProjectManager, 'Senior Project Manager', p.Department);
+    });
+
+    state.tasks.forEach(t => {
+      const proj = state.projects.find(p => p.ID === t.ProjectID);
+      const dept = proj ? proj.Department : 'steel';
+      addMember(t.Assignee, 'Team Member', dept);
+    });
+
+    state.teamMembers = extractedMembers;
+  }
 }
 
 function initUI() {
@@ -394,13 +519,22 @@ function drawDashboardCharts() {
   if (deptChartInstance) deptChartInstance.destroy();
   if (statusChartInstance) statusChartInstance.destroy();
 
-  const depts = ['Engineering', 'Marketing', 'Sales', 'HR', 'Finance', 'Operations'];
-  const deptCounts = depts.map(d => state.projects.filter(p => p.Department === d).length);
+  const depts = [
+    'corporate procurement digital', 'imports', 'MDM', 'capex', 'it',
+    'exports', 'exim', 'banking', 'finance', 'steel'
+  ];
+  const deptLabels = depts.map(d => {
+    if (d === 'it') return 'IT';
+    if (d === 'exim') return 'EXIM';
+    if (d === 'MDM') return 'MDM';
+    return d.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+  });
+  const deptCounts = depts.map(d => state.projects.filter(p => String(p.Department).toLowerCase() === d.toLowerCase()).length);
 
   deptChartInstance = new Chart(ctxDept, {
     type: 'bar',
     data: {
-      labels: depts,
+      labels: deptLabels,
       datasets: [{
         label: 'Projects',
         data: deptCounts,
@@ -472,6 +606,8 @@ function generateProjectCardHtml(project) {
     ? `Completed: ${formatDate(project.ActualEndDate || project.PlannedEndDate)}` 
     : `Target: ${formatDate(project.PlannedEndDate)}`;
 
+  const capitalizedDept = project.Department === 'it' ? 'IT' : (project.Department === 'exim' ? 'EXIM' : (project.Department === 'MDM' ? 'MDM' : project.Department.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')));
+
   return `
     <div class="project-card" onclick="app.showProjectDetails('${project.ID}')">
       <div class="project-card-header">
@@ -495,7 +631,7 @@ function generateProjectCardHtml(project) {
         
         <div class="project-meta-grid">
           <div class="meta-item">
-            <i data-lucide="dollar-sign"></i>
+            <i data-lucide="indian-rupee"></i>
             <span>Spent: ${formatCurrency(project.Spent)}</span>
           </div>
           <div class="meta-item">
@@ -510,7 +646,7 @@ function generateProjectCardHtml(project) {
       </div>
       
       <div class="project-card-footer">
-        <span class="badge badge-dept">${project.Department}</span>
+        <span class="badge badge-dept">${capitalizedDept}</span>
         <button class="btn btn-ghost btn-sm" style="padding: 0 4px;">
           <span>Workspace</span>
           <i data-lucide="arrow-right" style="width: 14px; height: 14px;"></i>
@@ -671,8 +807,18 @@ function renderProjectGanttTab(project) {
     return;
   }
 
+  // Sort tasks hierarchically
+  projectTasks.sort((a, b) => compareTaskIds(a.ID, b.ID));
+
   // Find overall chart start and end dates
-  const taskTimings = projectTasks.map(t => ({ start: new Date(t.StartDate).getTime(), end: new Date(t.EndDate).getTime() }));
+  const taskTimings = projectTasks.map(t => {
+    const startStr = t.ActualStartDate || t.PlannedStartDate || t.StartDate;
+    const endStr = t.ActualEndDate || t.PlannedEndDate || t.EndDate;
+    return {
+      start: startStr ? new Date(startStr).getTime() : new Date().getTime(),
+      end: endStr ? new Date(endStr).getTime() : new Date(Date.now() + 7*24*60*60*1000).getTime()
+    };
+  });
   
   let minTime = Math.min(...taskTimings.map(t => t.start));
   let maxTime = Math.max(...taskTimings.map(t => t.end));
@@ -727,24 +873,45 @@ function renderProjectGanttTab(project) {
   };
 
   const taskRowsHtml = projectTasks.map(t => {
-    const tStart = new Date(t.StartDate).getTime();
-    const tEnd = new Date(t.EndDate).getTime();
+    const startStr = t.ActualStartDate || t.PlannedStartDate || t.StartDate;
+    const endStr = t.ActualEndDate || t.PlannedEndDate || t.EndDate;
+    const tStart = startStr ? new Date(startStr).getTime() : new Date().getTime();
+    const tEnd = endStr ? new Date(endStr).getTime() : new Date(Date.now() + 7*24*60*60*1000).getTime();
     
     const leftOffset = ((tStart - minTime) / totalDuration) * 100;
     const width = ((tEnd - tStart) / totalDuration) * 100;
-    const color = colorsMap[t.Status] || '#810055';
+    
+    const level = String(t.ID).split('.').length - 1;
+    const hasChildren = projectTasks.some(child => String(child.ID).startsWith(t.ID + '.'));
+
+    let barStyleHtml = '';
+    if (hasChildren) {
+      // Summary task styling
+      barStyleHtml = `
+        <div class="gantt-bar" style="left: ${leftOffset}%; width: ${width}%; height: 8px; background: linear-gradient(90deg, #ec4899, #810055); border-radius: 2px; top: calc(50% - 4px); overflow: visible;">
+          <div class="gantt-bar-text" style="top: -16px; font-size: 10px; font-weight: 700; color: #ec4899;">${t.Progress}%</div>
+        </div>
+      `;
+    } else {
+      const color = colorsMap[t.Status] || '#810055';
+      barStyleHtml = `
+        <div class="gantt-bar" style="left: ${leftOffset}%; width: ${width}%">
+          <div class="gantt-bar-progress" style="width: ${t.Progress}%; background-color: ${color}"></div>
+          <div class="gantt-bar-text">${t.Progress}%</div>
+        </div>
+      `;
+    }
 
     return `
       <div class="gantt-row">
-        <div class="gantt-task-label">
-          <div class="gantt-task-name">${t.Name}</div>
+        <div class="gantt-task-label" style="padding-left: ${12 + level * 16}px;">
+          <div class="gantt-task-name" style="font-weight: ${level === 0 ? '600' : '400'}; color: ${level === 0 ? 'white' : 'var(--text-secondary)'};">
+            <span class="task-id-badge" style="font-size: 10px; opacity: 0.6; margin-right: 4px;">${t.ID}</span>${t.Name}
+          </div>
           <div class="gantt-task-assignee">${t.Assignee || 'Unassigned'}</div>
         </div>
         <div class="gantt-bar-container">
-          <div class="gantt-bar" style="left: ${leftOffset}%; width: ${width}%">
-            <div class="gantt-bar-progress" style="width: ${t.Progress}%; background-color: ${color}"></div>
-            <div class="gantt-bar-text">${t.Progress}%</div>
-          </div>
+          ${barStyleHtml}
         </div>
       </div>
     `;
@@ -774,6 +941,7 @@ function renderProjectGanttTab(project) {
       <div class="legend-item"><div class="legend-color" style="background-color: #ec4899;"></div><span>In Progress</span></div>
       <div class="legend-item"><div class="legend-color" style="background-color: #937b8b;"></div><span>Not Started</span></div>
       <div class="legend-item"><div class="legend-color" style="background-color: #ef4444;"></div><span>Blocked</span></div>
+      <div class="legend-item"><div class="legend-color" style="background: linear-gradient(90deg, #ec4899, #810055); height: 8px;"></div><span>Summary Task</span></div>
     </div>
   `;
 }
@@ -787,22 +955,42 @@ function renderProjectTasksTab(project) {
     return;
   }
 
+  // Sort tasks hierarchically
+  projectTasks.sort((a, b) => compareTaskIds(a.ID, b.ID));
+
   tasksContainer.innerHTML = projectTasks.map((t, index) => {
+    const level = String(t.ID).split('.').length - 1;
     const isChecked = t.Status === 'completed';
+    const hasChildren = projectTasks.some(child => String(child.ID).startsWith(t.ID + '.'));
+    
+    // Add visual delay warnings
+    let delayWarningHtml = '';
+    if (t.DaysDelayed > 0) {
+      delayWarningHtml = `
+        <div class="task-delay-alert" style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: #f87171; margin-top: 6px; background-color: rgba(239, 68, 68, 0.08); padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(239, 68, 68, 0.15); width: fit-content;">
+          <i data-lucide="alert-triangle" style="width: 14px; height: 14px;"></i>
+          <span>Delayed by ${t.DaysDelayed} days: "${t.DelayReason}" (${t.DelayReportedBy})</span>
+        </div>
+      `;
+    }
+
     return `
-      <div class="task-item">
+      <div class="task-item" style="margin-left: ${level * 24}px; border-left: ${level > 0 ? '2px dashed rgba(255,255,255,0.1)' : 'none'}; padding-left: ${level > 0 ? '16px' : '0'};">
         <div class="task-checkbox-wrapper">
           <input type="checkbox" class="task-checkbox" data-task-id="${t.ID}" ${isChecked ? 'checked' : ''} onchange="app.toggleTaskComplete('${t.ID}', this.checked)">
         </div>
         <div class="task-details">
           <div class="task-title-row">
-            <span class="task-title">${t.Name}</span>
+            <span class="task-title" style="font-weight: ${level === 0 ? '600' : '400'}; color: ${level === 0 ? 'white' : 'var(--text-secondary)'};">
+              <span class="task-id-badge" style="font-size: 10px; background-color: rgba(255,255,255,0.08); border-radius: 4px; padding: 1px 4px; margin-right: 6px; font-weight: normal; color: var(--text-muted);">${t.ID}</span>${t.Name}
+            </span>
             <span class="task-badge task-badge-${t.Status}">${t.Status.replace('-', ' ')}</span>
           </div>
           <div class="task-meta">
             <span>Assignee: <strong>${t.Assignee || 'Unassigned'}</strong></span>
-            <span>Schedule: ${formatDate(t.StartDate)} - ${formatDate(t.EndDate)}</span>
+            <span>Schedule: ${formatDate(t.PlannedStartDate || t.StartDate)} - ${formatDate(t.PlannedEndDate || t.EndDate)}</span>
           </div>
+          ${delayWarningHtml}
         </div>
         <div class="task-progress-col">
           <div class="progress-label-row">
@@ -810,7 +998,7 @@ function renderProjectTasksTab(project) {
             <span>${t.Progress}%</span>
           </div>
           <div class="progress-bar-bg">
-            <div class="progress-bar-fill fill-cyan" style="width: ${t.Progress}%"></div>
+            <div class="progress-bar-fill ${hasChildren ? 'fill-pink' : 'fill-cyan'}" style="width: ${t.Progress}%"></div>
           </div>
         </div>
       </div>
@@ -908,16 +1096,32 @@ function renderReports() {
 
 // Task Checkbox Toggle
 function toggleTaskComplete(taskId, isChecked) {
-  const task = state.tasks.find(t => t.ID === taskId);
+  const task = state.tasks.find(t => t.ID === taskId && t.ProjectID === currentProjectId);
   if (!task) return;
 
-  if (isChecked) {
-    task.Status = 'completed';
-    task.Progress = 100;
-  } else {
-    task.Status = 'in-progress';
-    task.Progress = 50;
-  }
+  const targetProgress = isChecked ? 100 : 0;
+  const targetStatus = isChecked ? 'completed' : 'not-started';
+
+  // Toggle this task and all its descendants
+  const projectTasks = state.tasks.filter(t => t.ProjectID === task.ProjectID);
+  const descendants = projectTasks.filter(t => 
+    t.ID === taskId || String(t.ID).startsWith(taskId + '.')
+  );
+
+  descendants.forEach(d => {
+    d.Progress = targetProgress;
+    d.Status = targetStatus;
+    // Clear delays if marked complete
+    if (isChecked) {
+      d.DaysDelayed = 0;
+      d.DelayReason = '';
+      d.DelayImpact = '';
+      d.DelayReportedBy = '';
+    }
+  });
+
+  // Recalculate rollup progress from bottom up
+  rollupProjectTasks(task.ProjectID);
 
   // Recalculate project progress
   recalculateProjectProgress(task.ProjectID);
@@ -930,8 +1134,14 @@ function recalculateProjectProgress(projectId) {
 
   const projectTasks = state.tasks.filter(t => t.ProjectID === projectId);
   if (projectTasks.length > 0) {
-    const sum = projectTasks.reduce((s, t) => s + t.Progress, 0);
-    project.Progress = Math.round(sum / projectTasks.length);
+    // Re-run rollup
+    rollupProjectTasks(projectId);
+    
+    // Project progress is calculated as average of Level 0 tasks
+    const rootTasks = projectTasks.filter(t => !String(t.ID).includes('.'));
+    const targetTasks = rootTasks.length > 0 ? rootTasks : projectTasks;
+    const sum = targetTasks.reduce((s, t) => s + t.Progress, 0);
+    project.Progress = Math.round(sum / targetTasks.length);
   }
 
   calculateProjectDelaysAndStatus(project);
@@ -1020,18 +1230,101 @@ function setupEventListeners() {
     }
   });
 
+  function updateParentTaskDropdown() {
+    const level = document.getElementById('task-form-level').value;
+    const parentGroup = document.getElementById('task-form-parent-group');
+    const parentSelect = document.getElementById('task-form-parent');
+    
+    const projectTasks = state.tasks.filter(t => t.ProjectID === currentProjectId);
+    projectTasks.sort((a, b) => compareTaskIds(a.ID, b.ID));
+
+    if (level === '1') {
+      parentGroup.style.display = 'none';
+      parentSelect.removeAttribute('required');
+    } else if (level === '2') {
+      parentGroup.style.display = 'block';
+      parentSelect.setAttribute('required', 'required');
+      const level1Tasks = projectTasks.filter(t => !String(t.ID).includes('.'));
+      parentSelect.innerHTML = level1Tasks.map(t => `<option value="${t.ID}">${t.ID} - ${t.Name}</option>`).join('');
+      if (level1Tasks.length === 0) {
+        parentSelect.innerHTML = '<option value="">No level 1 tasks available</option>';
+      }
+    } else if (level === '3') {
+      parentGroup.style.display = 'block';
+      parentSelect.setAttribute('required', 'required');
+      const level2Tasks = projectTasks.filter(t => {
+        const parts = String(t.ID).split('.');
+        return parts.length === 2;
+      });
+      parentSelect.innerHTML = level2Tasks.map(t => `<option value="${t.ID}">${t.ID} - ${t.Name}</option>`).join('');
+      if (level2Tasks.length === 0) {
+        parentSelect.innerHTML = '<option value="">No level 2 tasks available</option>';
+      }
+    }
+  }
+
+  function getNextTaskId(projectId, level, parentId) {
+    const projectTasks = state.tasks.filter(t => t.ProjectID === projectId);
+    
+    if (level === '1') {
+      const level1Ids = projectTasks
+        .filter(t => !String(t.ID).includes('.'))
+        .map(t => Number(t.ID))
+        .filter(n => !isNaN(n));
+      const nextInt = level1Ids.length > 0 ? Math.max(...level1Ids) + 1 : 1;
+      return String(nextInt);
+    } else if (level === '2') {
+      const prefix = parentId + '.';
+      const level2Ids = projectTasks
+        .filter(t => String(t.ID).startsWith(prefix))
+        .map(t => String(t.ID).slice(prefix.length))
+        .filter(suffix => !suffix.includes('.'))
+        .map(Number)
+        .filter(n => !isNaN(n));
+      const nextSub = level2Ids.length > 0 ? Math.max(...level2Ids) + 1 : 1;
+      return parentId + '.' + nextSub;
+    } else if (level === '3') {
+      const prefix = parentId + '.';
+      const level3Ids = projectTasks
+        .filter(t => String(t.ID).startsWith(prefix))
+        .map(t => String(t.ID).slice(prefix.length))
+        .filter(suffix => !suffix.includes('.'))
+        .map(Number)
+        .filter(n => !isNaN(n));
+      const nextSubSub = level3Ids.length > 0 ? Math.max(...level3Ids) + 1 : 1;
+      return parentId + '.' + nextSubSub;
+    }
+    return '';
+  }
+
   document.getElementById('btn-add-delay').addEventListener('click', () => {
     document.getElementById('form-delay').reset();
     document.getElementById('delay-form-date').value = new Date().toISOString().split('T')[0];
+    
+    // Populate task dropdown
+    const taskSelect = document.getElementById('delay-form-task');
+    const projectTasks = state.tasks.filter(t => t.ProjectID === currentProjectId);
+    projectTasks.sort((a, b) => compareTaskIds(a.ID, b.ID));
+    if (projectTasks.length === 0) {
+      taskSelect.innerHTML = '<option value="">No tasks available</option>';
+    } else {
+      taskSelect.innerHTML = projectTasks.map(t => `<option value="${t.ID}">${t.ID} - ${t.Name}</option>`).join('');
+    }
+    
     openModal('modal-delay');
   });
 
   document.getElementById('btn-add-task').addEventListener('click', () => {
     document.getElementById('form-task').reset();
+    document.getElementById('task-form-level').value = '1';
+    updateParentTaskDropdown();
     document.getElementById('task-form-start').value = new Date().toISOString().split('T')[0];
     document.getElementById('task-form-end').value = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     openModal('modal-task');
   });
+
+  // Listen to level change to dynamically update parent dropdown
+  document.getElementById('task-form-level').addEventListener('change', updateParentTaskDropdown);
 
   // Modal Closures
   const setupModalClose = (modalId) => {
@@ -1101,19 +1394,27 @@ function setupEventListeners() {
       calculateProjectDelaysAndStatus(newProj);
       state.projects.push(newProj);
       
-      // Auto create a default task for it
+      // Auto create a default task for it (Parent task 1)
       state.tasks.push({
-        ID: `task${newId}-1`,
+        ID: '1',
         ProjectID: newId,
         Name: 'Project Kickoff & Setup',
-        StartDate: actualStart || plannedStart,
-        EndDate: new Date(new Date(actualStart || plannedStart).getTime() + 5*24*60*60*1000).toISOString().split('T')[0],
+        PlannedStartDate: actualStart || plannedStart,
+        PlannedEndDate: new Date(new Date(actualStart || plannedStart).getTime() + 5*24*60*60*1000).toISOString().split('T')[0],
+        ActualStartDate: actualStart || plannedStart,
+        ActualEndDate: '',
         Progress: progress,
         Status: progress === 100 ? 'completed' : (progress > 0 ? 'in-progress' : 'not-started'),
-        Assignee: pm
+        Assignee: pm,
+        DaysDelayed: 0,
+        DelayReason: '',
+        DelayImpact: '',
+        DelayReportedBy: ''
       });
     }
 
+    // Refresh dynamic team members check
+    normalizeStateData();
     saveState();
     closeModal('modal-project');
     
@@ -1127,31 +1428,33 @@ function setupEventListeners() {
   // Log Delay Form Submit
   document.getElementById('form-delay').addEventListener('submit', (e) => {
     e.preventDefault();
+    const taskId = document.getElementById('delay-form-task').value;
     const date = document.getElementById('delay-form-date').value;
     const days = Number(document.getElementById('delay-form-days').value);
     const reason = document.getElementById('delay-form-reason').value;
     const impact = document.getElementById('delay-form-impact').value;
     const reporter = document.getElementById('delay-form-reporter').value;
 
-    const delayId = `d${state.delays.length + 1}`;
-    const newDelay = {
-      ID: delayId,
-      ProjectID: currentProjectId,
-      Date: date,
-      Reason: reason,
-      Impact: impact,
-      ReportedBy: reporter,
-      DaysDelayed: days
-    };
+    if (taskId) {
+      const task = state.tasks.find(t => t.ID === taskId && t.ProjectID === currentProjectId);
+      if (task) {
+        task.DaysDelayed = days;
+        task.DelayReason = reason;
+        task.DelayImpact = impact;
+        task.DelayReportedBy = reporter;
+        if (task.Status !== 'completed') {
+          task.Status = 'blocked';
+        }
+      }
+    }
 
-    state.delays.push(newDelay);
-
-    // Save state and recalculate parent project delay status
+    // Recalculate parent project delay status
     const project = state.projects.find(p => p.ID === currentProjectId);
     if (project) {
       calculateProjectDelaysAndStatus(project);
     }
 
+    normalizeStateData();
     saveState();
     closeModal('modal-delay');
     showProjectDetails(currentProjectId);
@@ -1165,25 +1468,33 @@ function setupEventListeners() {
     const end = document.getElementById('task-form-end').value;
     const status = document.getElementById('task-form-status').value;
     const assignee = document.getElementById('task-form-assignee').value;
+    const level = document.getElementById('task-form-level').value;
+    const parentId = document.getElementById('task-form-parent').value;
 
-    const taskId = `task${currentProjectId}-${state.tasks.filter(t => t.ProjectID === currentProjectId).length + 1}`;
+    // Generate task ID hierarchically
+    const taskId = getNextTaskId(currentProjectId, level, parentId);
     const progressMap = { 'not-started': 0, 'in-progress': 50, 'completed': 100, 'blocked': 20 };
 
     const newTask = {
       ID: taskId,
       ProjectID: currentProjectId,
       Name: name,
-      StartDate: start,
-      EndDate: end,
+      PlannedStartDate: start,
+      PlannedEndDate: end,
+      ActualStartDate: status === 'not-started' ? '' : start,
+      ActualEndDate: status === 'completed' ? end : '',
       Progress: progressMap[status] || 0,
       Status: status,
-      Assignee: assignee
+      Assignee: assignee,
+      DaysDelayed: 0,
+      DelayReason: '',
+      DelayImpact: '',
+      DelayReportedBy: ''
     };
 
     state.tasks.push(newTask);
-    saveState();
     
-    // Recalculate average project progress
+    // Recalculate rollup progress and project progress
     recalculateProjectProgress(currentProjectId);
     
     closeModal('modal-task');
@@ -1196,52 +1507,55 @@ function setupEventListeners() {
     try {
       const wb = XLSX.utils.book_new();
       
-      const flatRows = [];
+      // 1. Projects Sheet
+      const projectRows = state.projects.map(p => ({
+        'Project id': p.ID,
+        'Project Name': p.Name,
+        'Project Description': p.Description,
+        'Project Planned Start Date': p.PlannedStartDate || '',
+        'Project Planned End Date': p.PlannedEndDate || '',
+        'Project Budget': p.Budget,
+        'Project Spent': p.Spent,
+        'Project Manager': p.ProjectManager,
+        'Department': p.Department,
+        'Project Status': p.Status,
+        'Project Actual Start Date': p.ActualStartDate || '',
+        'Project Actual End Date': p.ActualEndDate || '',
+        'Project Progress': p.Progress
+      }));
       
-      state.projects.forEach(p => {
-        const pTasks = state.tasks.filter(t => t.ProjectID === p.ID);
-        const pDelays = state.delays.filter(d => d.ProjectID === p.ID);
-        
-        const rowCount = Math.max(pTasks.length, pDelays.length, 1);
-        
-        for (let i = 0; i < rowCount; i++) {
-          const task = pTasks[i] || {};
-          const delay = pDelays[i] || {};
-          
-          flatRows.push({
-            ProjectID: p.ID,
-            ProjectName: p.Name,
-            ProjectDescription: p.Description,
-            Department: p.Department,
-            ProjectStatus: p.Status,
-            Budget: p.Budget,
-            Spent: p.Spent,
-            ProjectManager: p.ProjectManager,
-            ProjectPlannedStartDate: p.PlannedStartDate || '',
-            ProjectPlannedEndDate: p.PlannedEndDate || '',
-            ProjectActualStartDate: p.ActualStartDate || '',
-            ProjectActualEndDate: p.ActualEndDate || '',
-            
-            TaskID: task.ID || '',
-            TaskName: task.Name || '',
-            TaskStartDate: task.StartDate || '',
-            TaskEndDate: task.EndDate || '',
-            TaskProgress: task.Progress !== undefined ? task.Progress : '',
-            TaskStatus: task.Status || '',
-            TaskAssignee: task.Assignee || '',
-            
-            DelayDays: delay.DaysDelayed !== undefined ? delay.DaysDelayed : '',
-            DelayReason: delay.Reason || '',
-            DelayImpact: delay.Impact || '',
-            DelayReportedBy: delay.ReportedBy || ''
-          });
-        }
-      });
+      // 2. Tasks Sheet
+      const taskRows = state.tasks.map(t => ({
+        'Project id': t.ProjectID,
+        'Task Id': t.ID,
+        'Task Name': t.Name,
+        'Task Planned Start Date': t.PlannedStartDate || t.StartDate || '',
+        'Task Planned End Date': t.PlannedEndDate || t.EndDate || '',
+        'Task Actual Start Date': t.ActualStartDate || '',
+        'Task Actual End Date': t.ActualEndDate || '',
+        'Task Assignee': t.Assignee || '',
+        'Task Status': t.Status || '',
+        'Task Days Delayed': t.DaysDelayed || 0,
+        'Task Delay Reason': t.DelayReason || '',
+        'Task Delay Impact': t.DelayImpact || '',
+        'Task Delay Reported By': t.DelayReportedBy || '',
+        'Task Progress': t.Progress
+      }));
       
-      const wsProjectsTasks = XLSX.utils.json_to_sheet(flatRows);
-      const wsMembers = XLSX.utils.json_to_sheet(state.teamMembers);
+      // 3. Team Members Sheet
+      const memberRows = state.teamMembers.map(m => ({
+        'id': m.id || m.ID || '',
+        'name': m.name || '',
+        'role': m.role || '',
+        'department': m.department || ''
+      }));
 
-      XLSX.utils.book_append_sheet(wb, wsProjectsTasks, 'ProjectsAndTasks');
+      const wsProjects = XLSX.utils.json_to_sheet(projectRows);
+      const wsTasks = XLSX.utils.json_to_sheet(taskRows);
+      const wsMembers = XLSX.utils.json_to_sheet(memberRows);
+
+      XLSX.utils.book_append_sheet(wb, wsProjects, 'Project Details');
+      XLSX.utils.book_append_sheet(wb, wsTasks, 'Tasks');
       XLSX.utils.book_append_sheet(wb, wsMembers, 'TeamMembers');
 
       XLSX.writeFile(wb, 'database.xlsx');

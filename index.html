@@ -104,10 +104,10 @@
             <div class="stat-card">
               <div class="stat-card-header">
                 <span>Total Budget</span>
-                <div class="stat-card-icon"><i data-lucide="dollar-sign"></i></div>
+                <div class="stat-card-icon"><i data-lucide="indian-rupee"></i></div>
               </div>
-              <div class="stat-card-value" id="stat-total-budget">$0</div>
-              <div class="stat-card-desc" id="stat-budget-spent">Spent: $0 (0%)</div>
+              <div class="stat-card-value" id="stat-total-budget">₹0</div>
+              <div class="stat-card-desc" id="stat-budget-spent">Spent: ₹0 (0%)</div>
             </div>
             <div class="stat-card">
               <div class="stat-card-header">
@@ -188,12 +188,16 @@
                 <span class="filter-label">Department:</span>
                 <select id="filter-dept" class="filter-select">
                   <option value="All">All Departments</option>
-                  <option value="Engineering">Engineering</option>
-                  <option value="Marketing">Marketing</option>
-                  <option value="Sales">Sales</option>
-                  <option value="HR">HR</option>
-                  <option value="Finance">Finance</option>
-                  <option value="Operations">Operations</option>
+                  <option value="corporate procurement digital">Corporate Procurement Digital</option>
+                  <option value="imports">Imports</option>
+                  <option value="MDM">MDM</option>
+                  <option value="capex">Capex</option>
+                  <option value="it">IT</option>
+                  <option value="exports">Exports</option>
+                  <option value="exim">EXIM</option>
+                  <option value="banking">Banking</option>
+                  <option value="finance">Finance</option>
+                  <option value="steel">Steel</option>
                 </select>
               </div>
               <div class="filter-select-wrapper">
@@ -284,10 +288,10 @@
                   <div class="stat-card">
                     <div class="stat-card-header">
                       <span>Budget Usage</span>
-                      <i data-lucide="dollar-sign" style="width: 14px; height: 14px; color: var(--text-muted);"></i>
+                      <i data-lucide="indian-rupee" style="width: 14px; height: 14px; color: var(--text-muted);"></i>
                     </div>
-                    <div class="stat-card-value" id="detail-spent-val">$0</div>
-                    <div class="stat-card-desc" id="detail-budget-val">of $0 (0% utilized)</div>
+                    <div class="stat-card-value" id="detail-spent-val">₹0</div>
+                    <div class="stat-card-desc" id="detail-budget-val">of ₹0 (0% utilized)</div>
                   </div>
                   <div class="stat-card">
                     <div class="stat-card-header">
@@ -413,8 +417,8 @@
                   <span>Total Budget Deficit</span>
                   <div class="stat-card-icon"><i data-lucide="trending-up"></i></div>
                 </div>
-                <div class="stat-card-value" id="report-budget-deficit">$0</div>
-                <div class="stat-card-desc" id="report-spent-breakdown">Total Spent: $0</div>
+                <div class="stat-card-value" id="report-budget-deficit">₹0</div>
+                <div class="stat-card-desc" id="report-spent-breakdown">Total Spent: ₹0</div>
               </div>
               <div class="stat-card">
                 <div class="stat-card-header">
@@ -471,12 +475,16 @@
             <div class="form-group">
               <label class="form-label" for="project-form-dept">Department</label>
               <select id="project-form-dept" class="form-control" required>
-                <option value="Engineering">Engineering</option>
-                <option value="Marketing">Marketing</option>
-                <option value="Sales">Sales</option>
-                <option value="HR">HR</option>
-                <option value="Finance">Finance</option>
-                <option value="Operations">Operations</option>
+                <option value="corporate procurement digital">Corporate Procurement Digital</option>
+                <option value="imports">Imports</option>
+                <option value="MDM">MDM</option>
+                <option value="capex">Capex</option>
+                <option value="it">IT</option>
+                <option value="exports">Exports</option>
+                <option value="exim">EXIM</option>
+                <option value="banking">Banking</option>
+                <option value="finance">Finance</option>
+                <option value="steel">Steel</option>
               </select>
             </div>
             <div class="form-group">
@@ -511,12 +519,12 @@
           </div>
           <div class="form-row">
             <div class="form-group">
-              <label class="form-label" for="project-form-budget">Budget ($)</label>
-              <input type="number" id="project-form-budget" class="form-control" min="0" placeholder="e.g. 150000" required>
+              <label class="form-label" for="project-form-budget">Budget (₹)</label>
+              <input type="number" id="project-form-budget" class="form-control" min="0" placeholder="e.g. 1500000" required>
             </div>
             <div class="form-group">
-              <label class="form-label" for="project-form-spent">Spent ($)</label>
-              <input type="number" id="project-form-spent" class="form-control" min="0" placeholder="e.g. 45000" required>
+              <label class="form-label" for="project-form-spent">Spent (₹)</label>
+              <input type="number" id="project-form-spent" class="form-control" min="0" placeholder="e.g. 450000" required>
             </div>
           </div>
           <div class="form-row">
@@ -549,6 +557,12 @@
       </div>
       <div class="modal-body">
         <form id="form-delay">
+          <div class="form-group">
+            <label class="form-label" for="delay-form-task">Select Delayed Task</label>
+            <select id="delay-form-task" class="form-control" required>
+              <!-- Dynamic Options -->
+            </select>
+          </div>
           <div class="form-row">
             <div class="form-group">
               <label class="form-label" for="delay-form-date">Report Date</label>
@@ -594,6 +608,22 @@
           <div class="form-group">
             <label class="form-label" for="task-form-name">Task Name</label>
             <input type="text" id="task-form-name" class="form-control" placeholder="e.g. UI Wireframes Review" required>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="task-form-level">Task Level</label>
+              <select id="task-form-level" class="form-control" required>
+                <option value="1">Parent Task (Level 1)</option>
+                <option value="2">Subtask (Level 2)</option>
+                <option value="3">Sub-subtask (Level 3)</option>
+              </select>
+            </div>
+            <div class="form-group" id="task-form-parent-group" style="display: none;">
+              <label class="form-label" for="task-form-parent">Parent Task</label>
+              <select id="task-form-parent" class="form-control">
+                <!-- Dynamic Options -->
+              </select>
+            </div>
           </div>
           <div class="form-row">
             <div class="form-group">
