@@ -1002,7 +1002,7 @@ p.subtitle {
 
 .gantt-chart {
   min-width: 800px;
-  padding: 24px;
+  padding: 24px 24px 24px 0;
   position: relative;
 }
 
@@ -1011,16 +1011,28 @@ p.subtitle {
   border-bottom: 1px solid var(--border-color);
   padding-bottom: 12px;
   margin-bottom: 16px;
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  background-color: var(--bg-secondary);
 }
 
 .gantt-label-column-header {
   width: 220px;
+  min-width: 220px;
   flex-shrink: 0;
   font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  position: sticky;
+  left: 0;
+  z-index: 7;
+  background-color: var(--bg-secondary);
+  padding-left: 24px;
+  box-sizing: border-box;
+  box-shadow: 3px 0 6px rgba(0, 0, 0, 0.08);
 }
 
 .gantt-timeline-header {
@@ -1093,12 +1105,19 @@ p.subtitle {
 
 .gantt-task-label {
   width: 220px;
+  min-width: 220px;
   flex-shrink: 0;
   padding-right: 16px;
+  padding-left: 24px;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  min-width: 0;
+  position: sticky;
+  left: 0;
+  z-index: 5;
+  background-color: var(--bg-secondary);
+  box-sizing: border-box;
+  box-shadow: 3px 0 6px rgba(0, 0, 0, 0.08);
 }
 
 .gantt-task-name {
@@ -1155,6 +1174,69 @@ p.subtitle {
   color: white;
   text-shadow: 0 1px 2px rgba(0,0,0,0.5);
   pointer-events: none;
+}
+
+/* Gantt Delay Visualization */
+.gantt-bar-delay {
+  position: absolute;
+  height: 100%;
+  border-radius: 0 4px 4px 0;
+  background: repeating-linear-gradient(
+    -45deg,
+    #ef4444,
+    #ef4444 3px,
+    rgba(239, 68, 68, 0.7) 3px,
+    rgba(239, 68, 68, 0.7) 6px
+  );
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-left: 2px solid #dc2626;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 12px;
+}
+
+.gantt-delay-label {
+  font-size: 9px;
+  font-weight: 700;
+  color: white;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+  white-space: nowrap;
+  padding: 0 4px;
+  pointer-events: none;
+}
+
+.gantt-planned-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background-color: rgba(255, 255, 255, 0.5);
+  z-index: 3;
+  pointer-events: none;
+}
+
+.gantt-bar-delay-tooltip {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: rgba(30, 10, 20, 0.95);
+  color: white;
+  font-size: 11px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  white-space: nowrap;
+  z-index: 20;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.gantt-bar-delay:hover .gantt-bar-delay-tooltip {
+  display: block;
 }
 
 .gantt-legend {
@@ -1376,4 +1458,303 @@ textarea.form-control {
 }
 .benefits-breakdown-list::-webkit-scrollbar {
   display: none;  /* Chrome, Safari and Opera */
+}
+
+/* ================= GANTT COLLAPSIBLE HIERARCHY ================= */
+.gantt-collapse-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-muted);
+  margin-right: 4px;
+  flex-shrink: 0;
+  transition: all var(--transition-fast);
+  vertical-align: middle;
+}
+
+.gantt-collapse-toggle:hover {
+  background-color: rgba(129, 0, 85, 0.15);
+  color: var(--color-primary);
+}
+
+.gantt-row-parent {
+  cursor: default;
+}
+
+.gantt-row-parent .gantt-task-name {
+  display: flex;
+  align-items: center;
+}
+
+/* ================= LIGHT THEME ================= */
+[data-theme="light"] {
+  --bg-primary: #f5f0f3;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #f0e8ed;
+  --border-color: #e0d4dc;
+
+  --text-primary: #1a0e14;
+  --text-secondary: #5c4553;
+  --text-muted: #8c7484;
+
+  --color-primary: #810055;
+  --color-primary-hover: #9e0069;
+  --color-primary-glow: rgba(129, 0, 85, 0.1);
+
+  --color-success: #059669;
+  --color-success-bg: rgba(5, 150, 105, 0.1);
+  --color-warning: #d97706;
+  --color-warning-bg: rgba(217, 119, 6, 0.1);
+  --color-danger: #dc2626;
+  --color-danger-bg: rgba(220, 38, 38, 0.08);
+  --color-info: #db2777;
+  --color-info-bg: rgba(219, 39, 119, 0.08);
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.08);
+}
+
+/* Light theme overrides for specific elements */
+[data-theme="light"] body {
+  background-color: var(--bg-primary);
+}
+
+[data-theme="light"] .sidebar {
+  background-color: #ffffff;
+  border-right-color: var(--border-color);
+}
+
+[data-theme="light"] .brand-name {
+  background: linear-gradient(to right, #1a0e14, #5c4553);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+[data-theme="light"] .menu-item:hover {
+  background-color: rgba(129, 0, 85, 0.04);
+}
+
+[data-theme="light"] .menu-item.active {
+  background-color: rgba(129, 0, 85, 0.08);
+}
+
+[data-theme="light"] .top-header {
+  background-color: #ffffff;
+  border-bottom-color: var(--border-color);
+}
+
+[data-theme="light"] .stat-card {
+  background-color: #ffffff;
+  border-color: var(--border-color);
+}
+
+[data-theme="light"] .stat-card:hover {
+  border-color: rgba(129, 0, 85, 0.25);
+  box-shadow: 0 4px 16px rgba(129, 0, 85, 0.06);
+}
+
+[data-theme="light"] .card {
+  background-color: #ffffff;
+  border-color: var(--border-color);
+}
+
+[data-theme="light"] .project-card {
+  background-color: #ffffff;
+  border-color: var(--border-color);
+}
+
+[data-theme="light"] .project-card:hover {
+  border-color: rgba(129, 0, 85, 0.3);
+  box-shadow: 0 8px 24px rgba(129, 0, 85, 0.08);
+}
+
+[data-theme="light"] .filter-bar {
+  background-color: #ffffff;
+  border-color: var(--border-color);
+}
+
+[data-theme="light"] .search-input {
+  background-color: var(--bg-primary);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+[data-theme="light"] .filter-select {
+  background-color: var(--bg-primary);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+[data-theme="light"] .form-control {
+  background-color: var(--bg-primary);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+[data-theme="light"] .modal {
+  background-color: #ffffff;
+  border-color: var(--border-color);
+}
+
+[data-theme="light"] .btn-outline {
+  border-color: var(--border-color);
+  color: var(--text-secondary);
+  background-color: transparent;
+}
+
+[data-theme="light"] .btn-outline:hover {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+  background-color: rgba(129, 0, 85, 0.04);
+}
+
+[data-theme="light"] .btn-outline.active {
+  background-color: rgba(129, 0, 85, 0.08);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+[data-theme="light"] .gantt-chart-wrapper {
+  background-color: #ffffff;
+  border-color: var(--border-color);
+}
+
+[data-theme="light"] .gantt-label-column-header,
+[data-theme="light"] .gantt-task-label,
+[data-theme="light"] .gantt-header {
+  background-color: #ffffff;
+}
+
+[data-theme="light"] .gantt-label-column-header,
+[data-theme="light"] .gantt-task-label {
+  box-shadow: 3px 0 6px rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="light"] .gantt-bar-delay {
+  background: repeating-linear-gradient(
+    -45deg,
+    #ef4444,
+    #ef4444 3px,
+    rgba(239, 68, 68, 0.6) 3px,
+    rgba(239, 68, 68, 0.6) 6px
+  );
+}
+
+[data-theme="light"] .gantt-planned-marker {
+  background-color: rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="light"] .gantt-bar-delay-tooltip {
+  background-color: rgba(255, 255, 255, 0.97);
+  color: #1a0e14;
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+[data-theme="light"] .gantt-grid-line {
+  border-left-color: rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .gantt-bar {
+  background-color: var(--bg-tertiary);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .gantt-bar-text {
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.6);
+}
+
+[data-theme="light"] .gantt-bar-container:hover {
+  background-color: rgba(0, 0, 0, 0.02);
+}
+
+[data-theme="light"] .detail-header-card {
+  background-color: #ffffff;
+  border-bottom-color: var(--border-color);
+}
+
+[data-theme="light"] .task-item {
+  background-color: #ffffff;
+  border-color: var(--border-color);
+}
+
+[data-theme="light"] .task-item:hover {
+  border-color: rgba(129, 0, 85, 0.2);
+}
+
+[data-theme="light"] .task-checkbox {
+  background-color: var(--bg-primary);
+  border-color: var(--border-color);
+}
+
+[data-theme="light"] .teams-list-container {
+  background-color: #ffffff;
+  border-color: var(--border-color);
+}
+
+[data-theme="light"] .teams-table th {
+  background-color: var(--bg-primary);
+  border-bottom-color: var(--border-color);
+}
+
+[data-theme="light"] .teams-table td {
+  border-bottom-color: var(--border-color);
+}
+
+[data-theme="light"] .teams-table tr:hover td {
+  background-color: rgba(129, 0, 85, 0.02);
+}
+
+[data-theme="light"] .delay-card {
+  background-color: var(--bg-primary);
+  border-color: var(--border-color);
+}
+
+[data-theme="light"] .team-member-row {
+  border-bottom-color: rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="light"] .avatar-circle {
+  background-color: var(--bg-tertiary);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+[data-theme="light"] .stat-card-icon {
+  background-color: rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="light"] .sidebar-footer {
+  border-top-color: var(--border-color);
+}
+
+[data-theme="light"] .sidebar-brand {
+  border-bottom-color: var(--border-color);
+}
+
+[data-theme="light"] .kpi-card {
+  border-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+[data-theme="light"] .benefits-breakdown-list {
+  border-color: var(--border-color) !important;
+  background-color: var(--bg-primary) !important;
+}
+
+[data-theme="light"] .gantt-collapse-toggle:hover {
+  background-color: rgba(129, 0, 85, 0.08);
+}
+
+[data-theme="light"] .project-card-footer {
+  border-top-color: rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="light"] .gantt-controls-header {
+  background-color: #ffffff !important;
+  border-color: var(--border-color) !important;
 }

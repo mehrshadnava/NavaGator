@@ -12,6 +12,12 @@ let state = {
 let currentProjectId = null;
 let ganttViewScale = 'month';
 
+// Track collapsed state of Gantt tasks (keys are task IDs, value = true means collapsed)
+let ganttCollapsedTasks = {};
+
+// Theme state: 'dark' (default) or 'light'
+let currentTheme = localStorage.getItem('tracker_theme') || 'dark';
+
 // Helper: Parse Project Benefits into currency/cost or man days
 function parseBenefits(benefitsStr) {
   if (!benefitsStr) return { type: 'unknown', value: 0, text: 'N/A' };
@@ -87,12 +93,12 @@ function renderBenefitsWidget() {
 
       <!-- Scrollable Breakdown list of benefits -->
       <div class="benefits-breakdown-list" style="flex: 1; overflow-y: auto; background-color: rgba(255, 255, 255, 0.01); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 8px 12px; max-height: 130px;">
-        ${projectsBenefitsList.length === 0 ? 
-          `<div style="text-align: center; color: var(--text-secondary); padding: 24px; font-size: 13px;">No project benefits logged yet.</div>` :
-          projectsBenefitsList.map(item => `
+        ${projectsBenefitsList.length === 0 ?
+      `<div style="text-align: center; color: var(--text-secondary); padding: 24px; font-size: 13px;">No project benefits logged yet.</div>` :
+      projectsBenefitsList.map(item => `
             <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.03);">
               <div style="min-width: 0; flex: 1; padding-right: 12px;">
-                <div style="font-size: 13px; font-weight: 500; color: white; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${item.name}</div>
+                <div style="font-size: 13px; font-weight: 500; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${item.name}</div>
                 <div style="font-size: 10px; color: var(--text-muted); text-transform: capitalize; margin-top: 1px;">${item.dept}</div>
               </div>
               <span class="badge ${item.type === 'cost' ? 'badge-on-track' : 'badge-completed'}" style="font-size: 10px; padding: 2px 8px; border-radius: 4px;">
@@ -100,7 +106,7 @@ function renderBenefitsWidget() {
               </span>
             </div>
           `).join('')
-        }
+    }
       </div>
     </div>
   `;
@@ -118,7 +124,7 @@ function saveState() {
 // Generate XLSX Workbook from current state
 function generateWorkbookData() {
   const wb = XLSX.utils.book_new();
-  
+
   // 1. Projects Sheet
   const projectRows = state.projects.map(p => ({
     'Project id': p.ID,
@@ -136,7 +142,7 @@ function generateWorkbookData() {
     'Project Progress': p.Progress,
     'Project Benefits': p.Benefits || ''
   }));
-  
+
   // 2. Tasks Sheet
   const taskRows = state.tasks.map(t => ({
     'Project id': t.ProjectID,
@@ -154,7 +160,7 @@ function generateWorkbookData() {
     'Task Delay Reported By': t.DelayReportedBy || '',
     'Task Progress': t.Progress
   }));
-  
+
   // 3. Team Members Sheet
   const memberRows = state.teamMembers.map(m => ({
     'id': m.id || m.ID || '',
@@ -179,7 +185,7 @@ async function autoSaveExcelLocal() {
   try {
     const wb = generateWorkbookData();
     const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'base64' });
-    
+
     const response = await fetch('/api/save-database', {
       method: 'POST',
       headers: {
@@ -187,7 +193,7 @@ async function autoSaveExcelLocal() {
       },
       body: JSON.stringify({ fileData: wbout })
     });
-    
+
     if (response.ok) {
       console.log('Autosaved database.xlsx successfully!');
       showAutoSaveToast();
@@ -232,10 +238,10 @@ function showAutoSaveToast() {
     document.body.appendChild(toast);
     lucide.createIcons();
   }
-  
+
   toast.style.opacity = '1';
   toast.style.transform = 'translateY(0)';
-  
+
   if (toast.timeoutId) clearTimeout(toast.timeoutId);
   toast.timeoutId = setTimeout(() => {
     toast.style.opacity = '0';
@@ -262,6 +268,7 @@ let statusChartInstance = null;
 
 // ================= APP INITIALIZATION =================
 window.addEventListener('DOMContentLoaded', () => {
+  applyTheme(currentTheme);
   setupNavigation();
   setupEventListeners();
   loadData();
@@ -323,14 +330,14 @@ function compareTaskIds(idA, idB) {
 // Helper: Roll up task progress and status from bottom of hierarchy to top
 function rollupProjectTasks(projectId) {
   const projectTasks = state.tasks.filter(t => t.ProjectID === projectId);
-  
+
   // Sort from deepest level to shallowest level
   const sortedTasks = [...projectTasks].sort((a, b) => {
     const depthA = String(a.ID).split('.').length;
     const depthB = String(b.ID).split('.').length;
     return depthB - depthA;
   });
-  
+
   sortedTasks.forEach(parent => {
     const children = projectTasks.filter(child => {
       const parentParts = String(parent.ID).split('.');
@@ -340,11 +347,11 @@ function rollupProjectTasks(projectId) {
       }
       return false;
     });
-    
+
     if (children.length > 0) {
       const totalProgress = children.reduce((sum, child) => sum + (child.Progress || 0), 0);
       parent.Progress = Math.round(totalProgress / children.length);
-      
+
       if (parent.Progress === 100) {
         parent.Status = 'completed';
       } else if (parent.Progress > 0) {
@@ -352,7 +359,7 @@ function rollupProjectTasks(projectId) {
       } else {
         parent.Status = 'not-started';
       }
-      
+
       if (children.some(child => child.Status === 'blocked')) {
         parent.Status = 'blocked';
       }
@@ -362,22 +369,22 @@ function rollupProjectTasks(projectId) {
 
 function parseExcelData(workbook) {
   // Find project details sheet
-  const projectSheetName = workbook.SheetNames.find(name => 
-    name.toLowerCase().includes('project details') || 
-    name.toLowerCase().includes('projectdetails') || 
+  const projectSheetName = workbook.SheetNames.find(name =>
+    name.toLowerCase().includes('project details') ||
+    name.toLowerCase().includes('projectdetails') ||
     name.toLowerCase() === 'projects'
   ) || workbook.SheetNames[0];
 
   // Find tasks sheet
-  const tasksSheetName = workbook.SheetNames.find(name => 
-    name.toLowerCase() === 'tasks' || 
+  const tasksSheetName = workbook.SheetNames.find(name =>
+    name.toLowerCase() === 'tasks' ||
     name.toLowerCase().includes('task')
   ) || workbook.SheetNames[1];
 
   // Find team members sheet
-  const membersSheetName = workbook.SheetNames.find(name => 
-    name.toLowerCase().includes('teammember') || 
-    name.toLowerCase().includes('team member') || 
+  const membersSheetName = workbook.SheetNames.find(name =>
+    name.toLowerCase().includes('teammember') ||
+    name.toLowerCase().includes('team member') ||
     name.toLowerCase().includes('user') ||
     name.toLowerCase().includes('member')
   );
@@ -422,7 +429,7 @@ function parseExcelData(workbook) {
     const delayReason = String(getProp(row, ['Task Delay Reason', 'TaskDelayReason', 'DelayReason', 'Reason']) || '');
     const delayImpact = String(getProp(row, ['Task Delay Impact', 'TaskDelayImpact', 'DelayImpact', 'Impact']) || '');
     const delayReportedBy = String(getProp(row, ['Task Delay Reported By', 'TaskDelayReportedBy', 'DelayReportedBy', 'ReportedBy']) || '');
-    
+
     return {
       ID: taskId,
       ProjectID: projId,
@@ -444,11 +451,11 @@ function parseExcelData(workbook) {
   state.teamMembers = members;
 
   normalizeStateData();
-  
+
   // Recalculate project progress, delays, and statuses
   state.projects.forEach(p => {
     rollupProjectTasks(p.ID);
-    
+
     const pTasks = state.tasks.filter(t => t.ProjectID === p.ID);
     if (pTasks.length > 0) {
       // average of level 0 tasks
@@ -463,8 +470,8 @@ function parseExcelData(workbook) {
 
 // Calculate delays and status automatically based on planned/actual dates
 function calculateProjectDelaysAndStatus(project) {
-  const todayStr = '2026-06-13'; // Simulated simulation date
-  const today = new Date(todayStr);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
   const plannedStart = project.PlannedStartDate ? new Date(project.PlannedStartDate) : null;
   const plannedEnd = project.PlannedEndDate ? new Date(project.PlannedEndDate) : null;
@@ -528,7 +535,7 @@ function normalizeStateData() {
     t.ActualEndDate = t.ActualEndDate || '';
     t.DaysDelayed = Number(t.DaysDelayed || 0);
   });
-  
+
   // Re-build state.delays from task delays
   const delays = [];
   state.tasks.forEach(t => {
@@ -546,7 +553,7 @@ function normalizeStateData() {
     }
   });
   state.delays = delays;
-  
+
   state.teamMembers.forEach(m => {
     m.id = String(m.id || m.ID || '');
   });
@@ -561,7 +568,7 @@ function normalizeStateData() {
       const cleanName = name.trim();
       if (!cleanName || uniqueMembers.has(cleanName)) return;
       uniqueMembers.add(cleanName);
-      
+
       const memberId = 'tm' + (extractedMembers.length + 1);
       extractedMembers.push({
         id: memberId,
@@ -603,7 +610,7 @@ function populateDropdowns() {
   const assigneeSelect = document.getElementById('task-form-assignee');
 
   const pms = state.teamMembers.filter(m => m.role.toLowerCase().includes('manager') || m.role.toLowerCase().includes('director') || m.role.toLowerCase().includes('lead'));
-  
+
   pmSelect.innerHTML = pms.map(m => `<option value="${m.name}">${m.name} (${m.role})</option>`).join('');
   reporterSelect.innerHTML = state.teamMembers.map(m => `<option value="${m.name}">${m.name}</option>`).join('');
   assigneeSelect.innerHTML = state.teamMembers.map(m => `<option value="${m.name}">${m.name}</option>`).join('');
@@ -628,7 +635,7 @@ function switchView(viewName) {
     // Hide export/add actions in empty state
     document.getElementById('btn-export-excel').style.display = 'none';
     document.getElementById('btn-add-project').style.display = 'none';
-    
+
     // Disable menu items
     document.querySelectorAll('.sidebar .menu-item').forEach(item => {
       item.classList.add('disabled');
@@ -639,7 +646,7 @@ function switchView(viewName) {
     // Show normal actions
     document.getElementById('btn-export-excel').style.display = 'inline-flex';
     document.getElementById('btn-add-project').style.display = 'inline-flex';
-    
+
     // Enable menu items
     document.querySelectorAll('.sidebar .menu-item').forEach(item => {
       item.classList.remove('disabled');
@@ -702,13 +709,13 @@ function renderDashboard() {
   const totalProjects = state.projects.length;
   const activeProjects = state.projects.filter(p => p.Status !== 'completed').length;
   const completedProjects = totalProjects - activeProjects;
-  
+
   const totalBudget = state.projects.reduce((sum, p) => sum + (p.Budget || 0), 0);
   const totalSpent = state.projects.reduce((sum, p) => sum + (p.Spent || 0), 0);
   const budgetUtilization = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
 
   const avgProgress = totalProjects > 0 ? Math.round(state.projects.reduce((sum, p) => sum + (p.Progress || 0), 0) / totalProjects) : 0;
-  
+
   const delayedProjects = state.projects.filter(p => p.Status === 'delayed');
   const delayedCount = delayedProjects.length;
   const totalDelayDays = state.projects.reduce((sum, p) => sum + (p.DaysDelayed || 0), 0);
@@ -716,12 +723,12 @@ function renderDashboard() {
   // Update Metric Nodes
   document.getElementById('stat-total-projects').textContent = totalProjects;
   document.getElementById('stat-projects-breakdown').textContent = `${activeProjects} active | ${completedProjects} completed`;
-  
+
   document.getElementById('stat-total-budget').textContent = formatCurrency(totalBudget);
   document.getElementById('stat-budget-spent').textContent = `Spent: ${formatCurrency(totalSpent)} (${budgetUtilization}%)`;
 
   document.getElementById('stat-avg-progress').textContent = `${avgProgress}%`;
-  
+
   document.getElementById('stat-delayed-count').textContent = delayedCount;
   document.getElementById('stat-delayed-days').textContent = `${totalDelayDays} total delay days logged`;
 
@@ -732,7 +739,7 @@ function renderDashboard() {
   // Render Recent Projects (up to 3)
   const recentContainer = document.getElementById('dashboard-recent-projects');
   const recent = [...state.projects].slice(-3).reverse();
-  
+
   if (recent.length === 0) {
     recentContainer.innerHTML = `<div style="grid-column: 1/-1; text-align: center; padding: 24px; color: var(--text-secondary);">No projects logged. Click "Add Project" to start tracking.</div>`;
   } else {
@@ -757,6 +764,10 @@ function drawDashboardCharts() {
   });
   const deptCounts = depts.map(d => state.projects.filter(p => String(p.Department).toLowerCase() === d.toLowerCase()).length);
 
+  const isLight = currentTheme === 'light';
+  const tickColor = isLight ? '#4a3644' : '#d7c8d1';
+  const gridColor = isLight ? 'rgba(0,0,0,0.07)' : 'rgba(255,255,255,0.05)';
+
   deptChartInstance = new Chart(ctxDept, {
     type: 'bar',
     data: {
@@ -773,8 +784,17 @@ function drawDashboardCharts() {
       maintainAspectRatio: false,
       plugins: { legend: { display: false } },
       scales: {
-        x: { ticks: { color: '#d7c8d1' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-        y: { ticks: { color: '#d7c8d1', stepSize: 1 }, grid: { color: 'rgba(255,255,255,0.05)' } }
+        x: { ticks: { color: tickColor }, grid: { color: gridColor } },
+        y: {
+          ticks: { color: tickColor, stepSize: 1 },
+          grid: { color: gridColor },
+          title: {
+            display: true,
+            text: 'Number of Projects',
+            color: tickColor,
+            font: { size: 13, weight: '600' }
+          }
+        }
       }
     }
   });
@@ -802,7 +822,7 @@ function generateProjectCardHtml(project) {
   const teamSize = uniqueAssignees.size;
 
   const dateString = project.Status === 'completed' || project.ActualEndDate
-    ? `Completed: ${formatDate(project.ActualEndDate || project.PlannedEndDate)}` 
+    ? `Completed: ${formatDate(project.ActualEndDate || project.PlannedEndDate)}`
     : `Target: ${formatDate(project.PlannedEndDate)}`;
 
   const capitalizedDept = project.Department === 'it' ? 'IT' : (project.Department === 'exim' ? 'EXIM' : (project.Department === 'MDM' ? 'MDM' : project.Department.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')));
@@ -868,14 +888,14 @@ function renderProjectsList() {
   const filtered = state.projects.filter(p => {
     const matchesSearch = p.Name.toLowerCase().includes(searchQuery) || p.Description.toLowerCase().includes(searchQuery);
     const matchesDept = selectedDept === 'All' || p.Department === selectedDept;
-    
+
     let matchesStatus = true;
     if (selectedStatus === 'completed') {
       matchesStatus = p.Status === 'completed';
     } else if (selectedStatus === 'active') {
       matchesStatus = p.Status !== 'completed';
     }
-    
+
     return matchesSearch && matchesDept && matchesStatus;
   });
 
@@ -898,7 +918,7 @@ function showProjectDetails(id) {
   document.getElementById('detail-project-desc').textContent = project.Description;
   document.getElementById('detail-project-dept').textContent = project.Department;
   document.getElementById('detail-project-pm').textContent = `PM: ${project.ProjectManager}`;
-  
+
   const statusBadge = document.getElementById('detail-project-status-badge');
   if (project.Status === 'completed') {
     statusBadge.style.display = 'inline-flex';
@@ -911,17 +931,17 @@ function showProjectDetails(id) {
   // Metrics
   document.getElementById('detail-progress-val').textContent = `${project.Progress}%`;
   document.getElementById('detail-progress-bar').style.width = `${project.Progress}%`;
-  
+
   document.getElementById('detail-spent-val').textContent = formatCurrency(project.Spent);
   const budgetUtil = project.Budget > 0 ? Math.round((project.Spent / project.Budget) * 100) : 0;
   document.getElementById('detail-budget-val').textContent = `of ${formatCurrency(project.Budget)} (${budgetUtil}% utilized)`;
 
   document.getElementById('detail-planned-dates').textContent = `${formatDate(project.PlannedStartDate)} - ${formatDate(project.PlannedEndDate)}`;
-  
+
   const actualStartText = project.ActualStartDate ? formatDate(project.ActualStartDate) : 'Not Started';
   const actualEndText = project.ActualEndDate ? formatDate(project.ActualEndDate) : (project.ActualStartDate ? 'In Progress' : '');
   document.getElementById('detail-actual-dates').textContent = actualEndText ? `${actualStartText} - ${actualEndText}` : actualStartText;
-  
+
   document.getElementById('detail-delayed-days-sub').textContent = `${project.DaysDelayed || 0} delay days calculated`;
 
   // Tabs Default setup
@@ -946,13 +966,13 @@ function renderProjectOverviewTab(project) {
   // Renders the team members list
   const projectTasks = state.tasks.filter(t => t.ProjectID === project.ID);
   const teamAssignees = new Set(projectTasks.map(t => t.Assignee).filter(Boolean));
-  
+
   const pmInfo = state.teamMembers.find(m => m.name === project.ProjectManager) || { name: project.ProjectManager, role: 'Project Manager' };
-  
+
   const teamListContainer = document.getElementById('detail-team-list');
   let teamHtml = `
     <div class="team-member-row">
-      <div class="avatar-circle pm">${pmInfo.name ? pmInfo.name.split(' ').map(n=>n[0]).join('') : 'PM'}</div>
+      <div class="avatar-circle pm">${pmInfo.name ? pmInfo.name.split(' ').map(n => n[0]).join('') : 'PM'}</div>
       <div class="member-info">
         <div class="member-name">${pmInfo.name} <span class="badge" style="background-color: var(--color-primary-glow); color: var(--color-primary); border-radius: 4px; padding: 2px 6px; font-size: 9px; vertical-align: middle;">PM</span></div>
         <div class="member-role">${pmInfo.role}</div>
@@ -965,7 +985,7 @@ function renderProjectOverviewTab(project) {
     const info = state.teamMembers.find(m => m.name === name) || { name: name, role: 'Contributor' };
     teamHtml += `
       <div class="team-member-row">
-        <div class="avatar-circle">${info.name ? info.name.split(' ').map(n=>n[0]).join('') : 'C'}</div>
+        <div class="avatar-circle">${info.name ? info.name.split(' ').map(n => n[0]).join('') : 'C'}</div>
         <div class="member-info">
           <div class="member-name">${info.name}</div>
           <div class="member-role">${info.role}</div>
@@ -973,7 +993,7 @@ function renderProjectOverviewTab(project) {
       </div>
     `;
   });
-  
+
   if (teamAssignees.size === 0 && !project.ProjectManager) {
     teamListContainer.innerHTML = '<div style="color: var(--text-secondary); text-align: center; padding: 12px 0;">No team assigned.</div>';
   } else {
@@ -1039,19 +1059,69 @@ function renderProjectGanttTab(project) {
   // Sort tasks hierarchically
   projectTasks.sort((a, b) => compareTaskIds(a.ID, b.ID));
 
-  // Find overall chart start and end dates
+  // Initialize collapsed state: collapse all parent tasks by default on first render
+  const collapseKey = `gantt_${project.ID}`;
+  if (!ganttCollapsedTasks[collapseKey]) {
+    ganttCollapsedTasks[collapseKey] = {};
+    // Collapse all tasks that have children by default
+    projectTasks.forEach(t => {
+      const hasChildren = projectTasks.some(child => {
+        const parentParts = String(t.ID).split('.');
+        const childParts = String(child.ID).split('.');
+        return childParts.length === parentParts.length + 1 &&
+          childParts.slice(0, parentParts.length).join('.') === String(t.ID);
+      });
+      if (hasChildren) {
+        ganttCollapsedTasks[collapseKey][t.ID] = true;
+      }
+    });
+  }
+
+  // Determine visible tasks based on collapse state
+  const collapsedSet = ganttCollapsedTasks[collapseKey];
+  const visibleTasks = projectTasks.filter(t => {
+    // A task is visible if none of its ancestors are collapsed
+    const parts = String(t.ID).split('.');
+    if (parts.length <= 1) return true; // Root tasks always visible
+    // Check all ancestors
+    for (let i = 1; i < parts.length; i++) {
+      const ancestorId = parts.slice(0, i).join('.');
+      if (collapsedSet[ancestorId]) return false;
+    }
+    return true;
+  });
+
+  // Find overall chart start and end dates (use all tasks, not just visible)
+  // Consider BOTH planned and actual dates to ensure delay portions are visible
   const taskTimings = projectTasks.map(t => {
-    const startStr = t.ActualStartDate || t.PlannedStartDate || t.StartDate;
-    const endStr = t.ActualEndDate || t.PlannedEndDate || t.EndDate;
+    const pStartStr = t.PlannedStartDate || t.StartDate;
+    const pEndStr = t.PlannedEndDate || t.EndDate;
+    const aStartStr = t.ActualStartDate;
+    const aEndStr = t.ActualEndDate;
+
+    const starts = [];
+    const ends = [];
+
+    if (pStartStr) starts.push(new Date(pStartStr).getTime());
+    if (aStartStr) starts.push(new Date(aStartStr).getTime());
+    if (pEndStr) ends.push(new Date(pEndStr).getTime());
+    if (aEndStr) ends.push(new Date(aEndStr).getTime());
+
+    // If a task has DaysDelayed > 0 and a planned end, add the delayed end
+    if (t.DaysDelayed > 0 && pEndStr) {
+      const delayedEnd = new Date(pEndStr).getTime() + t.DaysDelayed * 24 * 60 * 60 * 1000;
+      ends.push(delayedEnd);
+    }
+
     return {
-      start: startStr ? new Date(startStr).getTime() : new Date().getTime(),
-      end: endStr ? new Date(endStr).getTime() : new Date(Date.now() + 7*24*60*60*1000).getTime()
+      start: starts.length > 0 ? Math.min(...starts) : new Date().getTime(),
+      end: ends.length > 0 ? Math.max(...ends) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).getTime()
     };
   });
-  
+
   let minTime = Math.min(...taskTimings.map(t => t.start));
   let maxTime = Math.max(...taskTimings.map(t => t.end));
-  
+
   // Expand start/end slightly for buffer
   minTime = minTime - 3 * 24 * 60 * 60 * 1000;
   maxTime = maxTime + 7 * 24 * 60 * 60 * 1000;
@@ -1114,13 +1184,16 @@ function renderProjectGanttTab(project) {
     <div class="gantt-month-label" style="left: calc(220px + ${t.offset}%)">${t.label}</div>
   `).join('');
 
-  // Today marker line
-  const todayTime = new Date('2026-06-13').getTime(); // Current simulation date
+  // Today marker line — use real today's date
+  const todayDate = new Date();
+  todayDate.setHours(0, 0, 0, 0);
+  const todayTime = todayDate.getTime();
   let todayLineHtml = '';
+  let todayOffsetPercent = -1;
   if (todayTime >= minTime && todayTime <= maxTime) {
-    const todayOffset = ((todayTime - minTime) / totalDuration) * 100;
+    todayOffsetPercent = ((todayTime - minTime) / totalDuration) * 100;
     todayLineHtml = `
-      <div class="gantt-today-line" style="left: calc(220px + ${todayOffset}%)">
+      <div class="gantt-today-line" id="gantt-today-marker" style="left: calc(220px + ${todayOffsetPercent}%)">
         <div class="gantt-today-badge">Today</div>
       </div>
     `;
@@ -1134,24 +1207,104 @@ function renderProjectGanttTab(project) {
     'blocked': '#ef4444'
   };
 
-  const taskRowsHtml = projectTasks.map(t => {
-    const startStr = t.ActualStartDate || t.PlannedStartDate || t.StartDate;
-    const endStr = t.ActualEndDate || t.PlannedEndDate || t.EndDate;
-    const tStart = startStr ? new Date(startStr).getTime() : new Date().getTime();
-    const tEnd = endStr ? new Date(endStr).getTime() : new Date(Date.now() + 7*24*60*60*1000).getTime();
-    
+  const taskRowsHtml = visibleTasks.map(t => {
+    // Compute planned and actual dates separately for delay visualization
+    const plannedStartStr = t.PlannedStartDate || t.StartDate;
+    const plannedEndStr = t.PlannedEndDate || t.EndDate;
+    const actualStartStr = t.ActualStartDate;
+    const actualEndStr = t.ActualEndDate;
+
+    // The "display" bar uses actual dates when available, planned otherwise
+    const barStartStr = actualStartStr || plannedStartStr;
+    const barEndStr = actualEndStr || plannedEndStr;
+    const tStart = barStartStr ? new Date(barStartStr).getTime() : new Date().getTime();
+    const tEnd = barEndStr ? new Date(barEndStr).getTime() : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).getTime();
+
     const leftOffset = ((tStart - minTime) / totalDuration) * 100;
     const width = ((tEnd - tStart) / totalDuration) * 100;
-    
+
     const level = String(t.ID).split('.').length - 1;
-    const hasChildren = projectTasks.some(child => String(child.ID).startsWith(t.ID + '.'));
+    const hasChildren = projectTasks.some(child => {
+      const parentParts = String(t.ID).split('.');
+      const childParts = String(child.ID).split('.');
+      return childParts.length === parentParts.length + 1 &&
+        childParts.slice(0, parentParts.length).join('.') === String(t.ID);
+    });
+    const isCollapsed = collapsedSet[t.ID] || false;
+
+    // Collapse toggle icon for parent tasks
+    let toggleIcon = '';
+    if (hasChildren) {
+      toggleIcon = `<span class="gantt-collapse-toggle" data-task-id="${t.ID}" data-project-id="${project.ID}" title="${isCollapsed ? 'Expand subtasks' : 'Collapse subtasks'}">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          ${isCollapsed ? '<polyline points="9 18 15 12 9 6"></polyline>' : '<polyline points="6 9 12 15 18 9"></polyline>'}
+        </svg>
+      </span>`;
+    }
+
+    // --- Delay Calculation ---
+    let delayHtml = '';
+    let plannedEndMarkerHtml = '';
+    const daysDelayed = t.DaysDelayed || 0;
+
+    if (!hasChildren && plannedEndStr) {
+      const plannedEndTime = new Date(plannedEndStr).getTime();
+      const actualEndTime = actualEndStr ? new Date(actualEndStr).getTime() : null;
+
+      // Determine if there is a delay: either from DaysDelayed field or actual end > planned end
+      let delayEndTime = null;
+      let computedDelayDays = 0;
+
+      if (actualEndTime && actualEndTime > plannedEndTime) {
+        // Actual end extends beyond planned end
+        delayEndTime = actualEndTime;
+        computedDelayDays = Math.ceil((actualEndTime - plannedEndTime) / (1000 * 60 * 60 * 24));
+      } else if (daysDelayed > 0) {
+        // Use DaysDelayed field to project the delay
+        delayEndTime = plannedEndTime + daysDelayed * 24 * 60 * 60 * 1000;
+        computedDelayDays = daysDelayed;
+      }
+
+      if (delayEndTime && computedDelayDays > 0) {
+        // Delay bar: starts at planned end, extends to delay end
+        const delayLeft = ((plannedEndTime - minTime) / totalDuration) * 100;
+        const delayWidth = ((delayEndTime - plannedEndTime) / totalDuration) * 100;
+
+        // Planned end marker inside the main bar
+        const plannedEndOffsetInBar = ((plannedEndTime - tStart) / (tEnd - tStart)) * 100;
+
+        // Only show marker if it's inside the bar
+        if (plannedEndOffsetInBar > 0 && plannedEndOffsetInBar < 100) {
+          plannedEndMarkerHtml = `<div class="gantt-planned-marker" style="left: ${plannedEndOffsetInBar}%;" title="Planned End: ${formatDate(plannedEndStr)}"></div>`;
+        }
+
+        const delayReasonText = t.DelayReason ? ` — ${t.DelayReason}` : '';
+        delayHtml = `
+          <div class="gantt-bar-delay" style="left: ${delayLeft}%; width: ${delayWidth}%;" title="${computedDelayDays}d delayed${delayReasonText}">
+            <span class="gantt-delay-label">${computedDelayDays > 2 ? `+${computedDelayDays}d` : ''}</span>
+            <div class="gantt-bar-delay-tooltip">
+              ⚠ ${computedDelayDays} day${computedDelayDays !== 1 ? 's' : ''} delayed${delayReasonText}
+            </div>
+          </div>
+        `;
+      }
+    }
 
     let barStyleHtml = '';
     if (hasChildren) {
-      // Summary task styling
+      // Summary task styling — show total delay if any child is delayed
+      const childTasks = projectTasks.filter(child => {
+        const parentParts = String(t.ID).split('.');
+        const childParts = String(child.ID).split('.');
+        return childParts.length > parentParts.length &&
+          childParts.slice(0, parentParts.length).join('.') === String(t.ID);
+      });
+      const totalChildDelay = childTasks.reduce((sum, c) => sum + (c.DaysDelayed || 0), 0);
+      const delayIndicator = totalChildDelay > 0 ? ` <span style="color: #ef4444; font-size: 9px;">⚠ ${totalChildDelay}d</span>` : '';
+
       barStyleHtml = `
         <div class="gantt-bar" style="left: ${leftOffset}%; width: ${width}%; height: 8px; background: linear-gradient(90deg, #ec4899, #810055); border-radius: 2px; top: calc(50% - 4px); overflow: visible;">
-          <div class="gantt-bar-text" style="top: -16px; font-size: 10px; font-weight: 700; color: #ec4899;">${t.Progress}%</div>
+          <div class="gantt-bar-text" style="top: -16px; font-size: 10px; font-weight: 700; color: #ec4899;">${t.Progress}%${delayIndicator}</div>
         </div>
       `;
     } else {
@@ -1159,18 +1312,20 @@ function renderProjectGanttTab(project) {
       barStyleHtml = `
         <div class="gantt-bar" style="left: ${leftOffset}%; width: ${width}%">
           <div class="gantt-bar-progress" style="width: ${t.Progress}%; background-color: ${color}"></div>
+          ${plannedEndMarkerHtml}
           <div class="gantt-bar-text">${t.Progress}%</div>
         </div>
+        ${delayHtml}
       `;
     }
 
     return `
-      <div class="gantt-row">
-        <div class="gantt-task-label" style="padding-left: ${12 + level * 16}px;">
-          <div class="gantt-task-name" style="font-weight: ${level === 0 ? '600' : '400'}; color: ${level === 0 ? 'white' : 'var(--text-secondary)'};">
-            <span class="task-id-badge" style="font-size: 10px; opacity: 0.6; margin-right: 4px;">${t.ID}</span>${t.Name}
+      <div class="gantt-row ${hasChildren ? 'gantt-row-parent' : 'gantt-row-child'} ${isCollapsed ? 'gantt-row-collapsed' : ''}" data-level="${level}">
+        <div class="gantt-task-label" style="padding-left: ${24 + level * 16}px;">
+          <div class="gantt-task-name" style="font-weight: ${level === 0 ? '600' : '400'}; color: ${level === 0 ? 'var(--text-primary)' : 'var(--text-secondary)'};">
+            ${toggleIcon}<span class="task-id-badge" style="font-size: 10px; opacity: 0.6; margin-right: 4px;">${t.ID}</span>${t.Name}
           </div>
-          <div class="gantt-task-assignee">${t.Assignee || 'Unassigned'}</div>
+          <div class="gantt-task-assignee">${t.Assignee || 'Unassigned'}${daysDelayed > 0 ? ` <span style="color: var(--color-danger); font-size: 10px; font-weight: 600;">⚠ ${daysDelayed}d</span>` : ''}</div>
         </div>
         <div class="gantt-bar-container">
           ${barStyleHtml}
@@ -1197,6 +1352,27 @@ function renderProjectGanttTab(project) {
       ${taskRowsHtml}
     </div>
   `;
+
+  // Attach collapse toggle event listeners
+  container.querySelectorAll('.gantt-collapse-toggle').forEach(toggle => {
+    toggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const taskId = toggle.getAttribute('data-task-id');
+      const projId = toggle.getAttribute('data-project-id');
+      const key = `gantt_${projId}`;
+      if (ganttCollapsedTasks[key][taskId]) {
+        delete ganttCollapsedTasks[key][taskId];
+      } else {
+        ganttCollapsedTasks[key][taskId] = true;
+      }
+      // Re-render
+      const proj = state.projects.find(p => p.ID === projId);
+      if (proj) renderProjectGanttTab(proj);
+    });
+  });
+
+  // Auto-scroll to today's marker
+  scrollGanttToToday(todayOffsetPercent, labelColWidth, timelineWidthPx);
 }
 
 function setGanttViewScale(scale) {
@@ -1207,6 +1383,52 @@ function setGanttViewScale(scale) {
       renderProjectGanttTab(project);
     }
   }
+}
+
+// Scroll the Gantt chart wrapper so that today's line is visible (roughly centered)
+function scrollGanttToToday(todayOffsetPercent, labelColWidth, timelineWidthPx) {
+  if (todayOffsetPercent < 0) return; // today not in range
+  const wrapper = document.querySelector('.gantt-chart-wrapper');
+  if (!wrapper) return;
+
+  // Calculate the pixel position of today within the full gantt width
+  const todayPixel = labelColWidth + (todayOffsetPercent / 100) * timelineWidthPx;
+  // Center today in the visible area
+  const scrollTarget = todayPixel - wrapper.clientWidth / 2;
+  requestAnimationFrame(() => {
+    wrapper.scrollLeft = Math.max(0, scrollTarget);
+  });
+}
+
+// ================= THEME SYSTEM =================
+function applyTheme(theme) {
+  currentTheme = theme;
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('tracker_theme', theme);
+
+  // Update toggle button icon if exists
+  const themeBtn = document.getElementById('btn-theme-toggle');
+  if (themeBtn) {
+    const iconEl = themeBtn.querySelector('[data-lucide]');
+    if (iconEl) {
+      iconEl.setAttribute('data-lucide', theme === 'light' ? 'moon' : 'sun');
+    }
+    const labelEl = themeBtn.querySelector('.theme-label');
+    if (labelEl) {
+      labelEl.textContent = theme === 'light' ? 'Dark Mode' : 'Light Mode';
+    }
+    lucide.createIcons();
+  }
+
+  // Re-draw charts if they exist (to pick up new theme colors)
+  if (deptChartInstance) {
+    drawDashboardCharts();
+  }
+}
+
+function toggleTheme() {
+  const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+  applyTheme(newTheme);
 }
 
 function renderProjectTasksTab(project) {
@@ -1225,7 +1447,7 @@ function renderProjectTasksTab(project) {
     const level = String(t.ID).split('.').length - 1;
     const isChecked = t.Status === 'completed';
     const hasChildren = projectTasks.some(child => String(child.ID).startsWith(t.ID + '.'));
-    
+
     // Add visual delay warnings
     let delayWarningHtml = '';
     if (t.DaysDelayed > 0) {
@@ -1272,24 +1494,24 @@ function renderProjectTasksTab(project) {
 // 4. Teams Directory View
 function renderTeams() {
   const container = document.getElementById('teams-list');
-  
+
   const rows = state.teamMembers.map(m => {
     // Find all projects where this member is active (either PM or assigned to a task)
     const pmProjects = state.projects.filter(p => p.ProjectManager === m.name).map(p => p.Name);
     const taskProjects = state.tasks.filter(t => t.Assignee === m.name)
       .map(t => state.projects.find(p => p.ID === t.ProjectID)?.Name)
       .filter(Boolean);
-    
+
     // Union unique projects
     const allProjNames = Array.from(new Set([...pmProjects, ...taskProjects]));
-    
+
     const badgesHtml = allProjNames.map(name => `
       <span class="badge badge-dept" style="background-color: var(--color-primary-glow); border-color: rgba(129, 0, 85, 0.2); color: var(--color-primary);">${name}</span>
     `).join(' ');
 
     return `
       <tr>
-        <td style="font-weight: 600; color: white;">${m.name}</td>
+        <td style="font-weight: 600; color: var(--text-primary);">${m.name}</td>
         <td style="color: var(--text-secondary);">${m.role}</td>
         <td><span class="badge badge-dept">${m.department}</span></td>
         <td>
@@ -1367,7 +1589,7 @@ function toggleTaskComplete(taskId, isChecked) {
 
   // Toggle this task and all its descendants
   const projectTasks = state.tasks.filter(t => t.ProjectID === task.ProjectID);
-  const descendants = projectTasks.filter(t => 
+  const descendants = projectTasks.filter(t =>
     t.ID === taskId || String(t.ID).startsWith(taskId + '.')
   );
 
@@ -1399,7 +1621,7 @@ function recalculateProjectProgress(projectId) {
   if (projectTasks.length > 0) {
     // Re-run rollup
     rollupProjectTasks(projectId);
-    
+
     // Project progress is calculated as average of Level 0 tasks
     const rootTasks = projectTasks.filter(t => !String(t.ID).includes('.'));
     const targetTasks = rootTasks.length > 0 ? rootTasks : projectTasks;
@@ -1410,7 +1632,7 @@ function recalculateProjectProgress(projectId) {
   calculateProjectDelaysAndStatus(project);
 
   saveState();
-  
+
   // Refresh Details screen
   showProjectDetails(projectId);
 }
@@ -1427,7 +1649,7 @@ function closeModal(modalId) {
 
 // Event Listeners for Forms and Modals
 function setupEventListeners() {
-  
+
   // Navigation Search & Filters
   document.getElementById('project-search').addEventListener('input', renderProjectsList);
   document.getElementById('filter-dept').addEventListener('change', renderProjectsList);
@@ -1437,7 +1659,7 @@ function setupEventListeners() {
   document.querySelectorAll('.detail-tabs .detail-tab').forEach(tab => {
     tab.addEventListener('click', () => {
       const targetTab = tab.getAttribute('data-tab');
-      
+
       document.querySelectorAll('.detail-tabs .detail-tab').forEach(t => t.classList.remove('active'));
       tab.classList.add('active');
 
@@ -1464,7 +1686,7 @@ function setupEventListeners() {
   document.getElementById('btn-edit-project-details').addEventListener('click', () => {
     const project = state.projects.find(p => p.ID === currentProjectId);
     if (!project) return;
-    
+
     document.getElementById('project-form-id').value = project.ID;
     document.getElementById('project-form-name').value = project.Name;
     document.getElementById('project-form-desc').value = project.Description;
@@ -1478,7 +1700,7 @@ function setupEventListeners() {
     document.getElementById('project-form-spent').value = project.Spent;
     document.getElementById('project-form-pm').value = project.ProjectManager;
     document.getElementById('project-form-progress').value = project.Progress;
-    
+
     document.getElementById('modal-project-title').textContent = 'Edit Project Details';
     openModal('modal-project');
   });
@@ -1497,7 +1719,7 @@ function setupEventListeners() {
     const level = document.getElementById('task-form-level').value;
     const parentGroup = document.getElementById('task-form-parent-group');
     const parentSelect = document.getElementById('task-form-parent');
-    
+
     const projectTasks = state.tasks.filter(t => t.ProjectID === currentProjectId);
     projectTasks.sort((a, b) => compareTaskIds(a.ID, b.ID));
 
@@ -1528,7 +1750,7 @@ function setupEventListeners() {
 
   function getNextTaskId(projectId, level, parentId) {
     const projectTasks = state.tasks.filter(t => t.ProjectID === projectId);
-    
+
     if (level === '1') {
       const level1Ids = projectTasks
         .filter(t => !String(t.ID).includes('.'))
@@ -1563,7 +1785,7 @@ function setupEventListeners() {
   document.getElementById('btn-add-delay').addEventListener('click', () => {
     document.getElementById('form-delay').reset();
     document.getElementById('delay-form-date').value = new Date().toISOString().split('T')[0];
-    
+
     // Populate task dropdown
     const taskSelect = document.getElementById('delay-form-task');
     const projectTasks = state.tasks.filter(t => t.ProjectID === currentProjectId);
@@ -1573,7 +1795,7 @@ function setupEventListeners() {
     } else {
       taskSelect.innerHTML = projectTasks.map(t => `<option value="${t.ID}">${t.ID} - ${t.Name}</option>`).join('');
     }
-    
+
     openModal('modal-delay');
   });
 
@@ -1656,14 +1878,14 @@ function setupEventListeners() {
       };
       calculateProjectDelaysAndStatus(newProj);
       state.projects.push(newProj);
-      
+
       // Auto create a default task for it (Parent task 1)
       state.tasks.push({
         ID: '1',
         ProjectID: newId,
         Name: 'Project Kickoff & Setup',
         PlannedStartDate: actualStart || plannedStart,
-        PlannedEndDate: new Date(new Date(actualStart || plannedStart).getTime() + 5*24*60*60*1000).toISOString().split('T')[0],
+        PlannedEndDate: new Date(new Date(actualStart || plannedStart).getTime() + 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
         ActualStartDate: actualStart || plannedStart,
         ActualEndDate: '',
         Progress: progress,
@@ -1680,7 +1902,7 @@ function setupEventListeners() {
     normalizeStateData();
     saveState();
     closeModal('modal-project');
-    
+
     if (id) {
       showProjectDetails(id);
     } else {
@@ -1756,10 +1978,10 @@ function setupEventListeners() {
     };
 
     state.tasks.push(newTask);
-    
+
     // Recalculate rollup progress and project progress
     recalculateProjectProgress(currentProjectId);
-    
+
     closeModal('modal-task');
   });
 
@@ -1787,11 +2009,11 @@ function setupEventListeners() {
       try {
         const data = new Uint8Array(event.target.result);
         const workbook = XLSX.read(data, { type: 'array' });
-        
+
         parseExcelData(workbook);
         saveState();
         alert('Database imported successfully from ' + file.name + '!');
-        
+
         // Refresh Current Screen
         initUI();
       } catch (err) {
@@ -1808,5 +2030,6 @@ window.app = {
   switchView,
   showProjectDetails,
   toggleTaskComplete,
-  setGanttViewScale
+  setGanttViewScale,
+  toggleTheme
 };

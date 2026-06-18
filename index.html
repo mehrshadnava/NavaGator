@@ -54,6 +54,10 @@
           <h2 id="header-view-title">Dashboard</h2>
         </div>
         <div class="header-actions">
+          <button class="btn btn-outline" id="btn-theme-toggle" onclick="app.toggleTheme()" title="Toggle light/dark theme">
+            <i data-lucide="sun"></i>
+            <span class="theme-label">Light Mode</span>
+          </button>
           <input type="file" id="excel-import" accept=".xlsx, .xls" style="display: none;">
           <button class="btn btn-outline" onclick="document.getElementById('excel-import').click()">
             <i data-lucide="upload"></i>
