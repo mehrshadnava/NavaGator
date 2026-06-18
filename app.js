@@ -10,6 +10,102 @@ let state = {
 
 // Global active project ID for details view
 let currentProjectId = null;
+let ganttViewScale = 'month';
+
+// Helper: Parse Project Benefits into currency/cost or man days
+function parseBenefits(benefitsStr) {
+  if (!benefitsStr) return { type: 'unknown', value: 0, text: 'N/A' };
+  const str = String(benefitsStr).trim();
+  if (!str) return { type: 'unknown', value: 0, text: 'N/A' };
+
+  // Check for man days
+  const manDaysMatch = str.match(/^(\d+(?:\.\d+)?)\s*(?:man\s*days|mandays|man-days|md)$/i);
+  if (manDaysMatch) {
+    const val = parseFloat(manDaysMatch[1]);
+    return { type: 'mandays', value: val, text: `${val} Man-Days` };
+  }
+
+  // Check if it has numeric content
+  const cleanStr = str.replace(/[₹$,\s]/g, '');
+  const num = parseFloat(cleanStr);
+  if (!isNaN(num)) {
+    return { type: 'cost', value: num, text: formatCurrency(num) };
+  }
+
+  return { type: 'text', value: 0, text: str };
+}
+
+// Render Project Benefits Widget on Dashboard
+function renderBenefitsWidget() {
+  const container = document.getElementById('benefits-widget-container');
+  if (!container) return;
+
+  let totalCostSavings = 0;
+  let totalManDaysSaved = 0;
+  const projectsBenefitsList = [];
+
+  state.projects.forEach(p => {
+    const parsed = parseBenefits(p.Benefits);
+    if (parsed.type === 'cost') {
+      totalCostSavings += parsed.value;
+      projectsBenefitsList.push({ name: p.Name, dept: p.Department, text: parsed.text, type: 'cost' });
+    } else if (parsed.type === 'mandays') {
+      totalManDaysSaved += parsed.value;
+      projectsBenefitsList.push({ name: p.Name, dept: p.Department, text: parsed.text, type: 'mandays' });
+    } else if (p.Benefits) {
+      projectsBenefitsList.push({ name: p.Name, dept: p.Department, text: parsed.text, type: 'text' });
+    }
+  });
+
+  container.innerHTML = `
+    <div class="benefits-widget" style="display: flex; flex-direction: column; gap: 20px; min-height: 230px;">
+      <div class="benefits-summary-kpis" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+        
+        <!-- Cost Savings KPI Card -->
+        <div class="kpi-card" style="background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(16, 185, 129, 0.05)); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: var(--radius-md); padding: 14px; display: flex; align-items: center; gap: 12px; box-shadow: 0 4px 15px rgba(16, 185, 129, 0.05);">
+          <div style="background-color: rgba(16, 185, 129, 0.2); width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--color-success); flex-shrink: 0;">
+            <i data-lucide="indian-rupee" style="width: 20px; height: 20px;"></i>
+          </div>
+          <div>
+            <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; letter-spacing: 0.5px;">Financial Savings</div>
+            <div style="font-size: 18px; font-weight: 700; color: var(--text-primary); margin-top: 2px;">${formatCurrency(totalCostSavings)}</div>
+          </div>
+        </div>
+
+        <!-- Man Days Saved KPI Card -->
+        <div class="kpi-card" style="background: linear-gradient(135deg, rgba(236, 72, 153, 0.15), rgba(236, 72, 153, 0.05)); border: 1px solid rgba(236, 72, 153, 0.25); border-radius: var(--radius-md); padding: 14px; display: flex; align-items: center; gap: 12px; box-shadow: 0 4px 15px rgba(236, 72, 153, 0.05);">
+          <div style="background-color: rgba(236, 72, 153, 0.2); width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--color-info); flex-shrink: 0;">
+            <i data-lucide="calendar" style="width: 20px; height: 20px;"></i>
+          </div>
+          <div>
+            <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; letter-spacing: 0.5px;">Man-Days Saved</div>
+            <div style="font-size: 18px; font-weight: 700; color: var(--text-primary); margin-top: 2px;">${totalManDaysSaved} Days</div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Scrollable Breakdown list of benefits -->
+      <div class="benefits-breakdown-list" style="flex: 1; overflow-y: auto; background-color: rgba(255, 255, 255, 0.01); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 8px 12px; max-height: 130px;">
+        ${projectsBenefitsList.length === 0 ? 
+          `<div style="text-align: center; color: var(--text-secondary); padding: 24px; font-size: 13px;">No project benefits logged yet.</div>` :
+          projectsBenefitsList.map(item => `
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.03);">
+              <div style="min-width: 0; flex: 1; padding-right: 12px;">
+                <div style="font-size: 13px; font-weight: 500; color: white; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${item.name}</div>
+                <div style="font-size: 10px; color: var(--text-muted); text-transform: capitalize; margin-top: 1px;">${item.dept}</div>
+              </div>
+              <span class="badge ${item.type === 'cost' ? 'badge-on-track' : 'badge-completed'}" style="font-size: 10px; padding: 2px 8px; border-radius: 4px;">
+                ${item.text}
+              </span>
+            </div>
+          `).join('')
+        }
+      </div>
+    </div>
+  `;
+  lucide.createIcons();
+}
 
 // Fallback mock data has been removed to enforce empty database initialization.
 
@@ -37,7 +133,8 @@ function generateWorkbookData() {
     'Project Status': p.Status,
     'Project Actual Start Date': p.ActualStartDate || '',
     'Project Actual End Date': p.ActualEndDate || '',
-    'Project Progress': p.Progress
+    'Project Progress': p.Progress,
+    'Project Benefits': p.Benefits || ''
   }));
   
   // 2. Tasks Sheet
@@ -313,7 +410,8 @@ function parseExcelData(workbook) {
       ActualEndDate: String(getProp(row, ['Project Actual End Date', 'ProjectActualEndDate', 'ActualEndDate']) || ''),
       DaysDelayed: Number(getProp(row, ['Project Days Delayed', 'ProjectDaysDelayed', 'DaysDelayed']) || 0),
       ProjectManager: String(getProp(row, ['Project Manager', 'ProjectManager', 'Manager']) || ''),
-      Progress: Number(getProp(row, ['Project Progress', 'ProjectProgress', 'Progress']) || 0)
+      Progress: Number(getProp(row, ['Project Progress', 'ProjectProgress', 'Progress']) || 0),
+      Benefits: String(getProp(row, ['Project Benefits', 'ProjectBenefits', 'Benefits', 'benifits']) || '')
     };
   }).filter(p => p.ID);
 
@@ -418,6 +516,7 @@ function normalizeStateData() {
     p.PlannedEndDate = p.PlannedEndDate || p.EndDate || '';
     p.ActualStartDate = p.ActualStartDate || '';
     p.ActualEndDate = p.ActualEndDate || '';
+    p.Benefits = p.Benefits || '';
   });
   state.tasks.forEach(t => {
     t.Progress = Number(t.Progress || 0);
@@ -628,6 +727,7 @@ function renderDashboard() {
 
   // Draw Charts
   drawDashboardCharts();
+  renderBenefitsWidget();
 
   // Render Recent Projects (up to 3)
   const recentContainer = document.getElementById('dashboard-recent-projects');
@@ -642,10 +742,8 @@ function renderDashboard() {
 
 function drawDashboardCharts() {
   const ctxDept = document.getElementById('chart-departments').getContext('2d');
-  const ctxStatus = document.getElementById('chart-statuses').getContext('2d');
 
   if (deptChartInstance) deptChartInstance.destroy();
-  if (statusChartInstance) statusChartInstance.destroy();
 
   const depts = [
     'corporate procurement digital', 'imports', 'MDM', 'capex', 'it',
@@ -680,33 +778,6 @@ function drawDashboardCharts() {
       }
     }
   });
-
-  const statuses = ['on-track', 'at-risk', 'delayed', 'completed'];
-  const statusLabels = ['On Track', 'At Risk', 'Delayed', 'Completed'];
-  const statusCounts = statuses.map(s => state.projects.filter(p => p.Status === s).length);
-
-  statusChartInstance = new Chart(ctxStatus, {
-    type: 'doughnut',
-    data: {
-      labels: statusLabels,
-      datasets: [{
-        data: statusCounts,
-        backgroundColor: ['#10b981', '#f59e0b', '#ef4444', '#ec4899'],
-        borderColor: '#1b0e16',
-        borderWidth: 2
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: {
-          position: 'right',
-          labels: { color: '#d7c8d1', font: { family: 'Plus Jakarta Sans', size: 12 } }
-        }
-      }
-    }
-  });
 }
 
 function generateProjectCardHtml(project) {
@@ -736,6 +807,10 @@ function generateProjectCardHtml(project) {
 
   const capitalizedDept = project.Department === 'it' ? 'IT' : (project.Department === 'exim' ? 'EXIM' : (project.Department === 'MDM' ? 'MDM' : project.Department.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')));
 
+  const statusBadgeHtml = project.Status === 'completed'
+    ? `<span class="badge badge-completed">Completed</span>`
+    : '';
+
   return `
     <div class="project-card" onclick="app.showProjectDetails('${project.ID}')">
       <div class="project-card-header">
@@ -743,7 +818,7 @@ function generateProjectCardHtml(project) {
           <h3 class="project-card-title">${project.Name}</h3>
           <p class="project-card-desc">${project.Description}</p>
         </div>
-        <span class="badge badge-${project.Status}">${statusLabels[project.Status]}</span>
+        ${statusBadgeHtml}
       </div>
       
       <div class="project-card-body">
@@ -793,7 +868,14 @@ function renderProjectsList() {
   const filtered = state.projects.filter(p => {
     const matchesSearch = p.Name.toLowerCase().includes(searchQuery) || p.Description.toLowerCase().includes(searchQuery);
     const matchesDept = selectedDept === 'All' || p.Department === selectedDept;
-    const matchesStatus = selectedStatus === 'All' || p.Status === selectedStatus;
+    
+    let matchesStatus = true;
+    if (selectedStatus === 'completed') {
+      matchesStatus = p.Status === 'completed';
+    } else if (selectedStatus === 'active') {
+      matchesStatus = p.Status !== 'completed';
+    }
+    
     return matchesSearch && matchesDept && matchesStatus;
   });
 
@@ -818,8 +900,13 @@ function showProjectDetails(id) {
   document.getElementById('detail-project-pm').textContent = `PM: ${project.ProjectManager}`;
   
   const statusBadge = document.getElementById('detail-project-status-badge');
-  statusBadge.className = `badge badge-${project.Status}`;
-  statusBadge.textContent = project.Status.replace('-', ' ');
+  if (project.Status === 'completed') {
+    statusBadge.style.display = 'inline-flex';
+    statusBadge.className = 'badge badge-completed';
+    statusBadge.textContent = 'Completed';
+  } else {
+    statusBadge.style.display = 'none';
+  }
 
   // Metrics
   document.getElementById('detail-progress-val').textContent = `${project.Progress}%`;
@@ -926,9 +1013,23 @@ function renderProjectOverviewTab(project) {
   }
 }
 
+
 function renderProjectGanttTab(project) {
   const container = document.getElementById('gantt-chart-container');
   const projectTasks = state.tasks.filter(t => t.ProjectID === project.ID);
+
+  // Update view scale button active classes
+  const btnMonth = document.getElementById('btn-gantt-month');
+  const btnWeek = document.getElementById('btn-gantt-week');
+  const btnDay = document.getElementById('btn-gantt-day');
+  if (btnMonth && btnWeek && btnDay) {
+    btnMonth.classList.remove('active');
+    btnWeek.classList.remove('active');
+    btnDay.classList.remove('active');
+    if (ganttViewScale === 'month') btnMonth.classList.add('active');
+    else if (ganttViewScale === 'week') btnWeek.classList.add('active');
+    else if (ganttViewScale === 'day') btnDay.classList.add('active');
+  }
 
   if (projectTasks.length === 0) {
     container.innerHTML = `<div style="text-align: center; padding: 48px; color: var(--text-secondary);">Add tasks to view the Gantt chart timeline.</div>`;
@@ -957,27 +1058,60 @@ function renderProjectGanttTab(project) {
 
   const totalDuration = maxTime - minTime;
 
-  // Month Ticks calculation
-  const months = [];
+  // Scale Ticks calculation
+  const ticks = [];
   let current = new Date(minTime);
-  current.setDate(1); // Set to start of month
-  
-  while (current.getTime() <= maxTime) {
-    months.push({
-      label: current.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
-      offset: ((current.getTime() - minTime) / totalDuration) * 100
-    });
-    current.setMonth(current.getMonth() + 1);
+
+  if (ganttViewScale === 'month') {
+    current.setDate(1); // Set to start of month
+    while (current.getTime() <= maxTime) {
+      ticks.push({
+        label: current.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+        offset: ((current.getTime() - minTime) / totalDuration) * 100
+      });
+      current.setMonth(current.getMonth() + 1);
+    }
+  } else if (ganttViewScale === 'week') {
+    // Roll back to the start of the week (Sunday)
+    const day = current.getDay();
+    current.setDate(current.getDate() - day);
+    while (current.getTime() <= maxTime) {
+      ticks.push({
+        label: current.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        offset: ((current.getTime() - minTime) / totalDuration) * 100
+      });
+      current.setDate(current.getDate() + 7);
+    }
+  } else if (ganttViewScale === 'day') {
+    while (current.getTime() <= maxTime) {
+      ticks.push({
+        label: current.toLocaleDateString('en-US', { day: 'numeric', month: 'short' }),
+        offset: ((current.getTime() - minTime) / totalDuration) * 100
+      });
+      current.setDate(current.getDate() + 1);
+    }
   }
 
+  // Set Gantt container width dynamically in pixels to support horizontal scrolling
+  const labelColWidth = 220;
+  let timelineWidthPx = 800; // minimum fallback
+  if (ganttViewScale === 'month') {
+    timelineWidthPx = Math.max(800, ticks.length * 110);
+  } else if (ganttViewScale === 'week') {
+    timelineWidthPx = Math.max(1000, ticks.length * 80);
+  } else if (ganttViewScale === 'day') {
+    timelineWidthPx = Math.max(1200, ticks.length * 45);
+  }
+  container.style.width = `${labelColWidth + timelineWidthPx}px`;
+
   // Grid Lines HTML
-  const gridLinesHtml = months.map(m => `
-    <div class="gantt-grid-line" style="left: ${m.offset}%"></div>
+  const gridLinesHtml = ticks.map(t => `
+    <div class="gantt-grid-line" style="left: ${t.offset}%"></div>
   `).join('');
 
-  // Month Headers HTML
-  const monthHeadersHtml = months.map(m => `
-    <div class="gantt-month-label" style="left: calc(220px + ${m.offset}%)">${m.label}</div>
+  // Month/Week/Day Headers HTML
+  const scaleHeadersHtml = ticks.map(t => `
+    <div class="gantt-month-label" style="left: calc(220px + ${t.offset}%)">${t.label}</div>
   `).join('');
 
   // Today marker line
@@ -1050,7 +1184,7 @@ function renderProjectGanttTab(project) {
     <div class="gantt-header">
       <div class="gantt-label-column-header">Tasks / Assignee</div>
       <div class="gantt-timeline-header">
-        ${monthHeadersHtml}
+        ${scaleHeadersHtml}
       </div>
     </div>
     
@@ -1062,16 +1196,17 @@ function renderProjectGanttTab(project) {
       ${todayLineHtml}
       ${taskRowsHtml}
     </div>
-
-    <!-- Gantt Legend -->
-    <div class="gantt-legend">
-      <div class="legend-item"><div class="legend-color" style="background-color: #10b981;"></div><span>Completed</span></div>
-      <div class="legend-item"><div class="legend-color" style="background-color: #ec4899;"></div><span>In Progress</span></div>
-      <div class="legend-item"><div class="legend-color" style="background-color: #937b8b;"></div><span>Not Started</span></div>
-      <div class="legend-item"><div class="legend-color" style="background-color: #ef4444;"></div><span>Blocked</span></div>
-      <div class="legend-item"><div class="legend-color" style="background: linear-gradient(90deg, #ec4899, #810055); height: 8px;"></div><span>Summary Task</span></div>
-    </div>
   `;
+}
+
+function setGanttViewScale(scale) {
+  ganttViewScale = scale;
+  if (currentProjectId) {
+    const project = state.projects.find(p => p.ID === currentProjectId);
+    if (project) {
+      renderProjectGanttTab(project);
+    }
+  }
 }
 
 function renderProjectTasksTab(project) {
@@ -1672,5 +1807,6 @@ function setupEventListeners() {
 window.app = {
   switchView,
   showProjectDetails,
-  toggleTaskComplete
+  toggleTaskComplete,
+  setGanttViewScale
 };

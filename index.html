@@ -144,13 +144,13 @@
             <div class="card">
               <div class="card-header no-border">
                 <div class="card-title-group">
-                  <h3>Project Statuses</h3>
-                  <p>Overall state of project health</p>
+                  <h3>Project Benefits Summary</h3>
+                  <p>Value generated in financial cost and man-days</p>
                 </div>
               </div>
-              <div class="card-body">
-                <div class="chart-container">
-                  <canvas id="chart-statuses"></canvas>
+              <div class="card-body" style="padding-top: 0;">
+                <div id="benefits-widget-container">
+                  <!-- Dynamically Rendered Benefits Content -->
                 </div>
               </div>
             </div>
@@ -203,11 +203,9 @@
               <div class="filter-select-wrapper">
                 <span class="filter-label">Status:</span>
                 <select id="filter-status" class="filter-select">
-                  <option value="All">All Statuses</option>
-                  <option value="on-track">On Track</option>
-                  <option value="at-risk">At Risk</option>
-                  <option value="delayed">Delayed</option>
-                  <option value="completed">Completed</option>
+                  <option value="All">All Projects</option>
+                  <option value="active">Active Projects</option>
+                  <option value="completed">Completed Projects</option>
                 </select>
               </div>
             </div>
@@ -348,6 +346,20 @@
 
           <!-- 2. Gantt Chart Tab -->
           <div id="tab-gantt" class="tab-content">
+            <div class="gantt-controls-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 16px; background-color: var(--bg-secondary); border: 1px solid var(--border-color); padding: 12px 24px; border-radius: var(--radius-md);">
+              <div class="view-toggle-group" style="display: flex; gap: 8px;">
+                <button class="btn btn-outline btn-sm active" id="btn-gantt-month" onclick="app.setGanttViewScale('month')">Month View</button>
+                <button class="btn btn-outline btn-sm" id="btn-gantt-week" onclick="app.setGanttViewScale('week')">Week View</button>
+                <button class="btn btn-outline btn-sm" id="btn-gantt-day" onclick="app.setGanttViewScale('day')">Day View</button>
+              </div>
+              <div class="gantt-legend" id="gantt-legend-container" style="margin-top: 0; padding-top: 0; border-top: none; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
+                <div class="legend-item"><div class="legend-color" style="background-color: var(--color-success); width: 10px; height: 10px; border-radius: 2px;"></div><span>Completed</span></div>
+                <div class="legend-item"><div class="legend-color" style="background-color: var(--color-info); width: 10px; height: 10px; border-radius: 2px;"></div><span>In Progress</span></div>
+                <div class="legend-item"><div class="legend-color" style="background-color: var(--text-muted); width: 10px; height: 10px; border-radius: 2px;"></div><span>Not Started</span></div>
+                <div class="legend-item"><div class="legend-color" style="background-color: var(--color-danger); width: 10px; height: 10px; border-radius: 2px;"></div><span>Blocked</span></div>
+                <div class="legend-item"><div class="legend-color" style="background: linear-gradient(90deg, #ec4899, #810055); width: 24px; height: 6px; border-radius: 2px;"></div><span>Summary</span></div>
+              </div>
+            </div>
             <div class="gantt-chart-wrapper">
               <div class="gantt-chart" id="gantt-chart-container">
                 <!-- Dynamically Rendered Gantt Chart -->

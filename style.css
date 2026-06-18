@@ -1368,3 +1368,12 @@ textarea.form-control {
   flex-direction: column;
   gap: 32px;
 }
+
+/* Hide scrollbar for benefits breakdown list */
+.benefits-breakdown-list {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}
+.benefits-breakdown-list::-webkit-scrollbar {
+  display: none;  /* Chrome, Safari and Opera */
+}

@@ -76,6 +76,20 @@ try {
     'Steel Dashboard Enhancements': 'steel'
   };
 
+  const projectBenefits = {
+    'BP': '10 man days',
+    'Leasing Automation': '120000',
+    'eBRC': '450 man days',
+    'Forex': '250000',
+    'IDPMS Dashboard': '150000',
+    'Bill of Entry': '150 man days',
+    'Bill of Entry Checklist': '80000',
+    'Pre-Import Condition Controls in LN': '200 man days',
+    'Banking API Integration': '500000',
+    'ITR-1 Dashboard': '60000',
+    'Steel Dashboard Enhancements': '300 man days'
+  };
+
   rawData.forEach((row) => {
     // A row defines a new project if the Project column is set AND either:
     // - There are no task-like columns set, OR
@@ -106,6 +120,9 @@ try {
       if (!pm && currentProjectName === 'Bill of Entry Checklist') pm = 'Charit';
       if (!pm && currentProjectName === 'Steel Dashboard Enhancements') pm = 'Ivan';
 
+      const rawBenefits = row.Benefits || row.benifits || row.Benefit || row.benifit;
+      const benefitsVal = rawBenefits !== undefined ? String(rawBenefits).trim() : (projectBenefits[currentProjectName] || '');
+
       const p = {
         'Project id': String(currentProjectId),
         'Project Name': currentProjectName,
@@ -119,7 +136,8 @@ try {
         'Project Status': 'on-track',
         'Project Actual Start Date': excelDateToISO(row['Actual Start Date']),
         'Project Actual End Date': excelDateToISO(row['Actual End Date']),
-        'Project Progress': 0
+        'Project Progress': 0,
+        'Benefits': benefitsVal
       };
       projectsList.push(p);
       projectsMap.set(String(currentProjectId), p);
