@@ -63,7 +63,7 @@ try {
   };
 
   const projectDepts = {
-    'BP': 'corporate procurement digital',
+    'BP': 'corp proc digital',
     'Leasing Automation': 'finance',
     'eBRC': 'exports',
     'Forex': 'finance',
@@ -279,12 +279,12 @@ try {
       const progressSum = targetTasks.reduce((sum, t) => sum + (t['Task Progress'] || 0), 0);
       p['Project Progress'] = Math.round(progressSum / targetTasks.length);
 
-      // Roll up Status & Delay count
-      const totalDelays = pTasks.reduce((sum, t) => sum + (t['Task Days Delayed'] || 0), 0);
+      // Roll up Status & Delay count using max delay (do not sum parallel tasks!)
+      const maxDelay = rootTasks.reduce((max, t) => Math.max(max, t['Task Days Delayed'] || 0), 0);
       
       if (p['Project Progress'] === 100 || p['Project Actual End Date']) {
         p['Project Status'] = 'completed';
-      } else if (totalDelays > 0) {
+      } else if (maxDelay > 0) {
         p['Project Status'] = 'delayed';
       } else {
         p['Project Status'] = 'on-track';

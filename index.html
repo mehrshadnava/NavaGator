@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Enterprise Project Tracker</title>
+  <title>NavaGator</title>
   <meta name="description" content="Tracks and visualizes enterprise projects across departments with timelines, delays, responsibilities, and causes to enhance management and accountability." />
   <link rel="stylesheet" href="/style.css">
   
@@ -19,8 +19,8 @@
     <!-- Sidebar Navigation -->
     <aside class="sidebar">
       <div class="sidebar-brand">
-        <div class="brand-icon">P</div>
-        <span class="brand-name">Enterprise Tracker</span>
+        <div class="brand-icon" style="font-size: 20px;">🐊</div>
+        <span class="brand-name">Nava<span style="color: var(--color-info);">Gator</span></span>
       </div>
       <ul class="sidebar-menu">
         <li class="menu-item active" data-view="dashboard">
@@ -63,10 +63,7 @@
             <i data-lucide="upload"></i>
             <span>Import Excel</span>
           </button>
-          <button class="btn btn-outline" id="btn-export-excel">
-            <i data-lucide="download"></i>
-            <span>Export Excel</span>
-          </button>
+
           <button class="btn btn-primary" id="btn-add-project">
             <i data-lucide="plus"></i>
             <span>Add Project</span>
@@ -103,31 +100,47 @@
                 <div class="stat-card-icon"><i data-lucide="folder"></i></div>
               </div>
               <div class="stat-card-value" id="stat-total-projects">0</div>
-              <div class="stat-card-desc" id="stat-projects-breakdown">0 active | 0 completed</div>
+              <div class="stat-card-desc">All registered projects</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-card-header">
+                <span>Ongoing Projects</span>
+                <div class="stat-card-icon"><i data-lucide="play-circle"></i></div>
+              </div>
+              <div class="stat-card-value" id="stat-ongoing-projects">0</div>
+              <div class="stat-card-desc" id="stat-ongoing-desc">Active / delayed projects</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-card-header">
+                <span>Completed Projects</span>
+                <div class="stat-card-icon"><i data-lucide="check-circle-2"></i></div>
+              </div>
+              <div class="stat-card-value" id="stat-completed-projects">0</div>
+              <div class="stat-card-desc">Projects finished 100%</div>
             </div>
             <div class="stat-card">
               <div class="stat-card-header">
                 <span>Total Budget</span>
                 <div class="stat-card-icon"><i data-lucide="indian-rupee"></i></div>
               </div>
-              <div class="stat-card-value" id="stat-total-budget">₹0</div>
-              <div class="stat-card-desc" id="stat-budget-spent">Spent: ₹0 (0%)</div>
+              <div class="stat-card-value" id="stat-total-budget">₹1,00,00,000</div>
+              <div class="stat-card-desc">Hardcoded limit (1 Cr)</div>
             </div>
             <div class="stat-card">
               <div class="stat-card-header">
-                <span>Average Progress</span>
-                <div class="stat-card-icon"><i data-lucide="percent"></i></div>
+                <span>Budget Allocated</span>
+                <div class="stat-card-icon"><i data-lucide="wallet"></i></div>
               </div>
-              <div class="stat-card-value" id="stat-avg-progress">0%</div>
-              <div class="stat-card-desc">Weighted by project count</div>
+              <div class="stat-card-value" id="stat-budget-allocated">₹0</div>
+              <div class="stat-card-desc" id="stat-allocated-desc">Sum of project budgets</div>
             </div>
             <div class="stat-card">
               <div class="stat-card-header">
-                <span>Delayed Projects</span>
-                <div class="stat-card-icon"><i data-lucide="clock"></i></div>
+                <span>Budget Spent</span>
+                <div class="stat-card-icon"><i data-lucide="credit-card"></i></div>
               </div>
-              <div class="stat-card-value" id="stat-delayed-count">0</div>
-              <div class="stat-card-desc" id="stat-delayed-days">0 total delay days logged</div>
+              <div class="stat-card-value" id="stat-budget-spent">₹0</div>
+              <div class="stat-card-desc" id="stat-spent-desc">Spent to date</div>
             </div>
           </div>
 
@@ -192,7 +205,7 @@
                 <span class="filter-label">Department:</span>
                 <select id="filter-dept" class="filter-select">
                   <option value="All">All Departments</option>
-                  <option value="corporate procurement digital">Corporate Procurement Digital</option>
+                  <option value="corp proc digital">Corp Proc Digital</option>
                   <option value="imports">Imports</option>
                   <option value="MDM">MDM</option>
                   <option value="capex">Capex</option>
@@ -491,7 +504,7 @@
             <div class="form-group">
               <label class="form-label" for="project-form-dept">Department</label>
               <select id="project-form-dept" class="form-control" required>
-                <option value="corporate procurement digital">Corporate Procurement Digital</option>
+                <option value="corp proc digital">Corp Proc Digital</option>
                 <option value="imports">Imports</option>
                 <option value="MDM">MDM</option>
                 <option value="capex">Capex</option>

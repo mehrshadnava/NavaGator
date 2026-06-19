@@ -5,7 +5,8 @@ let state = {
   projects: [],
   teamMembers: [],
   tasks: [],
-  delays: []
+  delays: [],
+  benefitsConverted: false
 };
 
 // Global active project ID for details view
@@ -17,6 +18,34 @@ let ganttCollapsedTasks = {};
 
 // Theme state: 'dark' (default) or 'light'
 let currentTheme = localStorage.getItem('tracker_theme') || 'dark';
+
+// Helper: Parse Excel date serial number or string to YYYY-MM-DD
+function parseExcelDate(val) {
+  if (val === undefined || val === null || val === '') return '';
+  if (val instanceof Date) {
+    const year = val.getFullYear();
+    const month = String(val.getMonth() + 1).padStart(2, '0');
+    const day = String(val.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  const num = Number(val);
+  if (!isNaN(num) && num > 10000 && num < 100000) {
+    const date = new Date(Math.round((num - 25569) * 86400 * 1000));
+    const year = date.getUTCFullYear();
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(date.getUTCDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  const str = String(val).trim();
+  const d = new Date(str);
+  if (!isNaN(d.getTime())) {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  return str;
+}
 
 // Helper: Parse Project Benefits into currency/cost or man days
 function parseBenefits(benefitsStr) {
@@ -54,36 +83,66 @@ function renderBenefitsWidget() {
     const parsed = parseBenefits(p.Benefits);
     if (parsed.type === 'cost') {
       totalCostSavings += parsed.value;
-      projectsBenefitsList.push({ name: p.Name, dept: p.Department, text: parsed.text, type: 'cost' });
     } else if (parsed.type === 'mandays') {
       totalManDaysSaved += parsed.value;
-      projectsBenefitsList.push({ name: p.Name, dept: p.Department, text: parsed.text, type: 'mandays' });
-    } else if (p.Benefits) {
-      projectsBenefitsList.push({ name: p.Name, dept: p.Department, text: parsed.text, type: 'text' });
     }
   });
 
+  const convertedSaving = totalManDaysSaved * 2500;
+  const finalFinancialValue = state.benefitsConverted ? (totalCostSavings + convertedSaving) : totalCostSavings;
+
+  // Generate breakdown list
+  const breakdownHtml = state.projects.map(p => {
+    const parsed = parseBenefits(p.Benefits);
+    if (!p.Benefits) return '';
+
+    let displayText = p.Benefits;
+    let badgeClass = 'badge-completed';
+
+    if (parsed.type === 'cost') {
+      displayText = formatCurrency(parsed.value);
+      badgeClass = 'badge-on-track';
+    } else if (parsed.type === 'mandays') {
+      displayText = state.benefitsConverted ? formatCurrency(parsed.value * 2500) : `${parsed.value} Man-Days`;
+      badgeClass = state.benefitsConverted ? 'badge-on-track' : 'badge-completed';
+    }
+
+    const capitalizedDept = p.Department === 'it' ? 'IT' : (p.Department === 'exim' ? 'EXIM' : (p.Department === 'MDM' ? 'MDM' : p.Department.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')));
+
+    return `
+      <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.03);">
+        <div style="min-width: 0; flex: 1; padding-right: 12px;">
+          <div style="font-size: 13px; font-weight: 500; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${p.Name}</div>
+          <div style="font-size: 10px; color: var(--text-muted); text-transform: capitalize; margin-top: 1px;">${capitalizedDept}</div>
+        </div>
+        <span class="badge ${badgeClass}" style="font-size: 10px; padding: 2px 8px; border-radius: 4px; transition: all 0.3s ease;">
+          ${displayText}
+        </span>
+      </div>
+    `;
+  }).join('');
+
   container.innerHTML = `
     <div class="benefits-widget" style="display: flex; flex-direction: column; gap: 20px; min-height: 230px;">
-      <div class="benefits-summary-kpis" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+      <div id="benefits-kpis-wrapper" class="benefits-summary-kpis ${state.benefitsConverted ? 'converted' : ''}" style="display: flex; gap: 16px; position: relative; overflow: hidden; height: 72px;">
         
         <!-- Cost Savings KPI Card -->
-        <div class="kpi-card" style="background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(16, 185, 129, 0.05)); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: var(--radius-md); padding: 14px; display: flex; align-items: center; gap: 12px; box-shadow: 0 4px 15px rgba(16, 185, 129, 0.05);">
+        <div id="kpi-financial-savings" class="kpi-card financial-card" style="flex: 1; background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(16, 185, 129, 0.05)); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: var(--radius-md); padding: 14px; display: flex; align-items: center; gap: 12px; box-shadow: 0 4px 15px rgba(16, 185, 129, 0.05); cursor: pointer; transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);">
           <div style="background-color: rgba(16, 185, 129, 0.2); width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--color-success); flex-shrink: 0;">
             <i data-lucide="indian-rupee" style="width: 20px; height: 20px;"></i>
           </div>
           <div>
             <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; letter-spacing: 0.5px;">Financial Savings</div>
-            <div style="font-size: 18px; font-weight: 700; color: var(--text-primary); margin-top: 2px;">${formatCurrency(totalCostSavings)}</div>
+            <div id="financial-savings-value" style="font-size: 18px; font-weight: 700; color: var(--text-primary); margin-top: 2px;">${formatCurrency(finalFinancialValue)}</div>
           </div>
         </div>
 
         <!-- Man Days Saved KPI Card -->
-        <div class="kpi-card" style="background: linear-gradient(135deg, rgba(236, 72, 153, 0.15), rgba(236, 72, 153, 0.05)); border: 1px solid rgba(236, 72, 153, 0.25); border-radius: var(--radius-md); padding: 14px; display: flex; align-items: center; gap: 12px; box-shadow: 0 4px 15px rgba(236, 72, 153, 0.05);">
+        <div id="kpi-mandays-saved" class="kpi-card mandays-card" style="flex: 1; background: linear-gradient(135deg, rgba(236, 72, 153, 0.15), rgba(236, 72, 153, 0.05)); border: 1px solid rgba(236, 72, 153, 0.25); border-radius: var(--radius-md); padding: 14px; display: flex; align-items: center; gap: 12px; box-shadow: 0 4px 15px rgba(236, 72, 153, 0.05); cursor: pointer; transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1); overflow: hidden; max-width: 350px;">
           <div style="background-color: rgba(236, 72, 153, 0.2); width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--color-info); flex-shrink: 0;">
             <i data-lucide="calendar" style="width: 20px; height: 20px;"></i>
           </div>
-          <div>
+          <div class="mandays-content" style="transition: opacity 0.3s ease;">
             <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; letter-spacing: 0.5px;">Man-Days Saved</div>
             <div style="font-size: 18px; font-weight: 700; color: var(--text-primary); margin-top: 2px;">${totalManDaysSaved} Days</div>
           </div>
@@ -93,24 +152,95 @@ function renderBenefitsWidget() {
 
       <!-- Scrollable Breakdown list of benefits -->
       <div class="benefits-breakdown-list" style="flex: 1; overflow-y: auto; background-color: rgba(255, 255, 255, 0.01); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 8px 12px; max-height: 130px;">
-        ${projectsBenefitsList.length === 0 ?
+        ${breakdownHtml.trim() === '' ?
       `<div style="text-align: center; color: var(--text-secondary); padding: 24px; font-size: 13px;">No project benefits logged yet.</div>` :
-      projectsBenefitsList.map(item => `
-            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.03);">
-              <div style="min-width: 0; flex: 1; padding-right: 12px;">
-                <div style="font-size: 13px; font-weight: 500; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${item.name}</div>
-                <div style="font-size: 10px; color: var(--text-muted); text-transform: capitalize; margin-top: 1px;">${item.dept}</div>
-              </div>
-              <span class="badge ${item.type === 'cost' ? 'badge-on-track' : 'badge-completed'}" style="font-size: 10px; padding: 2px 8px; border-radius: 4px;">
-                ${item.text}
-              </span>
-            </div>
-          `).join('')
+      breakdownHtml
     }
       </div>
     </div>
   `;
   lucide.createIcons();
+  setupBenefitsInteraction();
+}
+
+function setupBenefitsInteraction() {
+  const cardMandays = document.getElementById('kpi-mandays-saved');
+  const cardFinancial = document.getElementById('kpi-financial-savings');
+  
+  if (cardMandays) {
+    cardMandays.addEventListener('click', () => {
+      if (!state.benefitsConverted) {
+        animateBenefitsToggled(true);
+      }
+    });
+  }
+
+  if (cardFinancial) {
+    cardFinancial.addEventListener('click', () => {
+      if (state.benefitsConverted) {
+        animateBenefitsToggled(false);
+      }
+    });
+  }
+}
+
+function animateBenefitsToggled(converted) {
+  state.benefitsConverted = converted;
+  saveState();
+
+  const wrapper = document.getElementById('benefits-kpis-wrapper');
+  const financialValueNode = document.getElementById('financial-savings-value');
+  
+  let totalCostSavings = 0;
+  let totalManDaysSaved = 0;
+
+  state.projects.forEach(p => {
+    const parsed = parseBenefits(p.Benefits);
+    if (parsed.type === 'cost') {
+      totalCostSavings += parsed.value;
+    } else if (parsed.type === 'mandays') {
+      totalManDaysSaved += parsed.value;
+    }
+  });
+
+  const convertedSaving = totalManDaysSaved * 2500;
+  const startVal = converted ? totalCostSavings : (totalCostSavings + convertedSaving);
+  const endVal = converted ? (totalCostSavings + convertedSaving) : totalCostSavings;
+
+  // Toggle classes for layout transition
+  if (wrapper) {
+    if (converted) {
+      wrapper.classList.add('converted');
+    } else {
+      wrapper.classList.remove('converted');
+    }
+  }
+
+  // Animate counter number
+  const duration = 500; // ms
+  const startTime = performance.now();
+
+  function updateCounter(currentTime) {
+    const elapsed = currentTime - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+    
+    // Easing function (easeOutQuad)
+    const ease = progress * (2 - progress);
+    const currentVal = Math.round(startVal + (endVal - startVal) * ease);
+    
+    if (financialValueNode) {
+      financialValueNode.textContent = formatCurrency(currentVal);
+    }
+    
+    if (progress < 1) {
+      requestAnimationFrame(updateCounter);
+    } else {
+      // Re-render full widget at the end to refresh project breakdown items list and badge styles
+      renderBenefitsWidget();
+    }
+  }
+
+  requestAnimationFrame(updateCounter);
 }
 
 // Fallback mock data has been removed to enforce empty database initialization.
@@ -411,10 +541,10 @@ function parseExcelData(workbook) {
       Status: String(getProp(row, ['Project Status', 'ProjectStatus', 'Status']) || 'on-track'),
       Budget: Number(getProp(row, ['Project Budget', 'ProjectBudget', 'Budget']) || 0),
       Spent: Number(getProp(row, ['Project Spent', 'ProjectSpent', 'Spent']) || 0),
-      PlannedStartDate: String(getProp(row, ['Project Planned Start Date', 'ProjectPlannedStartDate', 'PlannedStartDate', 'StartDate']) || ''),
-      PlannedEndDate: String(getProp(row, ['Project Planned End Date', 'ProjectPlannedEndDate', 'PlannedEndDate', 'EndDate']) || ''),
-      ActualStartDate: String(getProp(row, ['Project Actual Start Date', 'ProjectActualStartDate', 'ActualStartDate']) || ''),
-      ActualEndDate: String(getProp(row, ['Project Actual End Date', 'ProjectActualEndDate', 'ActualEndDate']) || ''),
+      PlannedStartDate: parseExcelDate(getProp(row, ['Project Planned Start Date', 'ProjectPlannedStartDate', 'PlannedStartDate', 'StartDate']) || ''),
+      PlannedEndDate: parseExcelDate(getProp(row, ['Project Planned End Date', 'ProjectPlannedEndDate', 'PlannedEndDate', 'EndDate']) || ''),
+      ActualStartDate: parseExcelDate(getProp(row, ['Project Actual Start Date', 'ProjectActualStartDate', 'ActualStartDate']) || ''),
+      ActualEndDate: parseExcelDate(getProp(row, ['Project Actual End Date', 'ProjectActualEndDate', 'ActualEndDate']) || ''),
       DaysDelayed: Number(getProp(row, ['Project Days Delayed', 'ProjectDaysDelayed', 'DaysDelayed']) || 0),
       ProjectManager: String(getProp(row, ['Project Manager', 'ProjectManager', 'Manager']) || ''),
       Progress: Number(getProp(row, ['Project Progress', 'ProjectProgress', 'Progress']) || 0),
@@ -434,10 +564,10 @@ function parseExcelData(workbook) {
       ID: taskId,
       ProjectID: projId,
       Name: String(getProp(row, ['Task Name', 'TaskName', 'Name']) || ''),
-      PlannedStartDate: String(getProp(row, ['Task Planned Start Date', 'TaskPlannedStartDate', 'StartDate', 'PlannedStartDate']) || ''),
-      PlannedEndDate: String(getProp(row, ['Task Planned End Date', 'TaskPlannedEndDate', 'EndDate', 'PlannedEndDate']) || ''),
-      ActualStartDate: String(getProp(row, ['Task Actual Start Date', 'TaskActualStartDate', 'ActualStartDate']) || ''),
-      ActualEndDate: String(getProp(row, ['Task Actual End Date', 'TaskActualEndDate', 'ActualEndDate']) || ''),
+      PlannedStartDate: parseExcelDate(getProp(row, ['Task Planned Start Date', 'TaskPlannedStartDate', 'StartDate', 'PlannedStartDate']) || ''),
+      PlannedEndDate: parseExcelDate(getProp(row, ['Task Planned End Date', 'TaskPlannedEndDate', 'EndDate', 'PlannedEndDate']) || ''),
+      ActualStartDate: parseExcelDate(getProp(row, ['Task Actual Start Date', 'TaskActualStartDate', 'ActualStartDate']) || ''),
+      ActualEndDate: parseExcelDate(getProp(row, ['Task Actual End Date', 'TaskActualEndDate', 'ActualEndDate']) || ''),
       Assignee: String(getProp(row, ['Task Assignee', 'TaskAssignee', 'Assignee']) || ''),
       Status: String(getProp(row, ['Task Status', 'TaskStatus', 'Status']) || 'not-started'),
       Progress: Number(getProp(row, ['Task Progress', 'TaskProgress', 'Progress']) || 0),
@@ -497,10 +627,12 @@ function calculateProjectDelaysAndStatus(project) {
     }
   }
 
-  // Combine baseline delay with the sum of logged task delays
+  // Rollup delays: use maximum delay of root tasks (do not sum parallel/all tasks)
   const projectTasks = state.tasks.filter(t => t.ProjectID === project.ID);
-  const totalLoggedTaskDelays = projectTasks.reduce((sum, t) => sum + (t.DaysDelayed || 0), 0);
-  project.DaysDelayed = Math.max(daysDelayed, totalLoggedTaskDelays);
+  const rootTasks = projectTasks.filter(t => !String(t.ID).includes('.'));
+  const targetTasks = rootTasks.length > 0 ? rootTasks : projectTasks;
+  const maxTaskDelay = targetTasks.reduce((max, t) => Math.max(max, t.DaysDelayed || 0), 0);
+  project.DaysDelayed = Math.max(daysDelayed, maxTaskDelay);
 
   // Determine status automatically
   if (project.Progress === 100 || actualEnd) {
@@ -633,7 +765,8 @@ function switchView(viewName) {
   if (!dbLoaded) {
     viewName = 'empty';
     // Hide export/add actions in empty state
-    document.getElementById('btn-export-excel').style.display = 'none';
+    const btnExport = document.getElementById('btn-export-excel');
+    if (btnExport) btnExport.style.display = 'none';
     document.getElementById('btn-add-project').style.display = 'none';
 
     // Disable menu items
@@ -644,7 +777,8 @@ function switchView(viewName) {
     });
   } else {
     // Show normal actions
-    document.getElementById('btn-export-excel').style.display = 'inline-flex';
+    const btnExport = document.getElementById('btn-export-excel');
+    if (btnExport) btnExport.style.display = 'inline-flex';
     document.getElementById('btn-add-project').style.display = 'inline-flex';
 
     // Enable menu items
@@ -720,17 +854,21 @@ function renderDashboard() {
   const delayedCount = delayedProjects.length;
   const totalDelayDays = state.projects.reduce((sum, p) => sum + (p.DaysDelayed || 0), 0);
 
-  // Update Metric Nodes
+  // Update Metric Nodes for 6 Widgets
   document.getElementById('stat-total-projects').textContent = totalProjects;
-  document.getElementById('stat-projects-breakdown').textContent = `${activeProjects} active | ${completedProjects} completed`;
-
-  document.getElementById('stat-total-budget').textContent = formatCurrency(totalBudget);
-  document.getElementById('stat-budget-spent').textContent = `Spent: ${formatCurrency(totalSpent)} (${budgetUtilization}%)`;
-
-  document.getElementById('stat-avg-progress').textContent = `${avgProgress}%`;
-
-  document.getElementById('stat-delayed-count').textContent = delayedCount;
-  document.getElementById('stat-delayed-days').textContent = `${totalDelayDays} total delay days logged`;
+  
+  document.getElementById('stat-ongoing-projects').textContent = activeProjects;
+  document.getElementById('stat-ongoing-desc').textContent = `${delayedCount} currently delayed`;
+  
+  document.getElementById('stat-completed-projects').textContent = completedProjects;
+  
+  document.getElementById('stat-total-budget').textContent = formatCurrency(10000000); // hardcode to 1 Crore (10000000 INR)
+  
+  document.getElementById('stat-budget-allocated').textContent = formatCurrency(totalBudget);
+  document.getElementById('stat-allocated-desc').textContent = `${Math.round(totalBudget / 10000000 * 100)}% of limit`;
+  
+  document.getElementById('stat-budget-spent').textContent = formatCurrency(totalSpent);
+  document.getElementById('stat-spent-desc').textContent = `${totalBudget > 0 ? Math.round(totalSpent / totalBudget * 100) : 0}% of allocated`;
 
   // Draw Charts
   drawDashboardCharts();
@@ -753,7 +891,7 @@ function drawDashboardCharts() {
   if (deptChartInstance) deptChartInstance.destroy();
 
   const depts = [
-    'corporate procurement digital', 'imports', 'MDM', 'capex', 'it',
+    'corp proc digital', 'imports', 'MDM', 'capex', 'it',
     'exports', 'exim', 'banking', 'finance', 'steel'
   ];
   const deptLabels = depts.map(d => {
@@ -1292,25 +1430,25 @@ function renderProjectGanttTab(project) {
 
     let barStyleHtml = '';
     if (hasChildren) {
-      // Summary task styling — show total delay if any child is delayed
+      // Summary task styling — show max delay of child tasks
       const childTasks = projectTasks.filter(child => {
         const parentParts = String(t.ID).split('.');
         const childParts = String(child.ID).split('.');
         return childParts.length > parentParts.length &&
           childParts.slice(0, parentParts.length).join('.') === String(t.ID);
       });
-      const totalChildDelay = childTasks.reduce((sum, c) => sum + (c.DaysDelayed || 0), 0);
-      const delayIndicator = totalChildDelay > 0 ? ` <span style="color: #ef4444; font-size: 9px;">⚠ ${totalChildDelay}d</span>` : '';
+      const maxChildDelay = childTasks.reduce((max, c) => Math.max(max, c.DaysDelayed || 0), 0);
+      const delayIndicator = maxChildDelay > 0 ? `<span class="delay-badge-parent">⚠ ${maxChildDelay}d</span>` : '';
 
       barStyleHtml = `
-        <div class="gantt-bar" style="left: ${leftOffset}%; width: ${width}%; height: 8px; background: linear-gradient(90deg, #ec4899, #810055); border-radius: 2px; top: calc(50% - 4px); overflow: visible;">
-          <div class="gantt-bar-text" style="top: -16px; font-size: 10px; font-weight: 700; color: #ec4899;">${t.Progress}%${delayIndicator}</div>
+        <div class="gantt-bar parent-bar" style="left: ${leftOffset}%; width: ${width}%; background: linear-gradient(90deg, #ec4899, #810055);">
+          <div class="gantt-bar-text">${t.Progress}% ${delayIndicator}</div>
         </div>
       `;
     } else {
       const color = colorsMap[t.Status] || '#810055';
       barStyleHtml = `
-        <div class="gantt-bar" style="left: ${leftOffset}%; width: ${width}%">
+        <div class="gantt-bar leaf-bar" style="left: ${leftOffset}%; width: ${width}%">
           <div class="gantt-bar-progress" style="width: ${t.Progress}%; background-color: ${color}"></div>
           ${plannedEndMarkerHtml}
           <div class="gantt-bar-text">${t.Progress}%</div>
@@ -1987,17 +2125,20 @@ function setupEventListeners() {
 
   // EXCEL INTERFACES
 
-  // Export Excel
-  document.getElementById('btn-export-excel').addEventListener('click', () => {
-    try {
-      const wb = generateWorkbookData();
-      XLSX.writeFile(wb, 'database.xlsx');
-      alert('Database exported successfully as database.xlsx! Overwrite the old database.xlsx in your workspace to persist it permanently.');
-    } catch (err) {
-      console.error('Failed to export Excel workbook:', err);
-      alert('Error exporting database to Excel: ' + err.message);
-    }
-  });
+  // Export Excel (safe check)
+  const btnExportExcel = document.getElementById('btn-export-excel');
+  if (btnExportExcel) {
+    btnExportExcel.addEventListener('click', () => {
+      try {
+        const wb = generateWorkbookData();
+        XLSX.writeFile(wb, 'database.xlsx');
+        alert('Database exported successfully as database.xlsx! Overwrite the old database.xlsx in your workspace to persist it permanently.');
+      } catch (err) {
+        console.error('Failed to export Excel workbook:', err);
+        alert('Error exporting database to Excel: ' + err.message);
+      }
+    });
+  }
 
   // Import Excel
   document.getElementById('excel-import').addEventListener('change', (e) => {
@@ -2008,7 +2149,7 @@ function setupEventListeners() {
     reader.onload = (event) => {
       try {
         const data = new Uint8Array(event.target.result);
-        const workbook = XLSX.read(data, { type: 'array' });
+        const workbook = XLSX.read(data, { type: 'array', cellDates: true, dateNF: 'yyyy-mm-dd' });
 
         parseExcelData(workbook);
         saveState();
