@@ -47,6 +47,27 @@ function parseExcelDate(val) {
   return str;
 }
 
+// Helper: Get local date offset by N days as YYYY-MM-DD string
+function getLocalOffsetDateString(daysOffset) {
+  const d = new Date();
+  d.setDate(d.getDate() + daysOffset);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+// Helper: Get current local date as YYYY-MM-DD string
+function getLocalTodayString() {
+  return getLocalOffsetDateString(0);
+}
+
+// Helper: Get Date object at UTC midnight for today's local date
+function getLocalTodayMidnight() {
+  const d = new Date();
+  return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+}
+
 // Helper: Parse Project Benefits into currency/cost or man days
 function parseBenefits(benefitsStr) {
   if (!benefitsStr) return { type: 'unknown', value: 0, text: 'N/A' };
@@ -600,8 +621,7 @@ function parseExcelData(workbook) {
 
 // Calculate delays and status automatically based on planned/actual dates
 function calculateProjectDelaysAndStatus(project) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const today = getLocalTodayMidnight();
 
   const plannedStart = project.PlannedStartDate ? new Date(project.PlannedStartDate) : null;
   const plannedEnd = project.PlannedEndDate ? new Date(project.PlannedEndDate) : null;
@@ -676,7 +696,7 @@ function normalizeStateData() {
         ID: `d_${t.ProjectID}_${t.ID}`,
         ProjectID: t.ProjectID,
         TaskID: t.ID,
-        Date: t.ActualStartDate || t.PlannedStartDate || new Date().toISOString().split('T')[0],
+        Date: t.ActualStartDate || t.PlannedStartDate || getLocalTodayString(),
         Reason: t.DelayReason,
         Impact: t.DelayImpact,
         ReportedBy: t.DelayReportedBy || 'Unknown',
@@ -1323,9 +1343,7 @@ function renderProjectGanttTab(project) {
   `).join('');
 
   // Today marker line — use real today's date
-  const todayDate = new Date();
-  todayDate.setHours(0, 0, 0, 0);
-  const todayTime = todayDate.getTime();
+  const todayTime = getLocalTodayMidnight().getTime();
   let todayLineHtml = '';
   let todayOffsetPercent = -1;
   if (todayTime >= minTime && todayTime <= maxTime) {
@@ -1922,7 +1940,7 @@ function setupEventListeners() {
 
   document.getElementById('btn-add-delay').addEventListener('click', () => {
     document.getElementById('form-delay').reset();
-    document.getElementById('delay-form-date').value = new Date().toISOString().split('T')[0];
+    document.getElementById('delay-form-date').value = getLocalTodayString();
 
     // Populate task dropdown
     const taskSelect = document.getElementById('delay-form-task');
@@ -1941,8 +1959,8 @@ function setupEventListeners() {
     document.getElementById('form-task').reset();
     document.getElementById('task-form-level').value = '1';
     updateParentTaskDropdown();
-    document.getElementById('task-form-start').value = new Date().toISOString().split('T')[0];
-    document.getElementById('task-form-end').value = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    document.getElementById('task-form-start').value = getLocalTodayString();
+    document.getElementById('task-form-end').value = getLocalOffsetDateString(7);
     openModal('modal-task');
   });
 
