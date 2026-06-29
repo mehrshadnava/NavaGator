@@ -1,0 +1,2486 @@
+/* app-v2.js - NavaGator Enterprise Tracker - Complete Vanilla JS */
+
+/* ============================================================
+   1. STATE
+   ============================================================ */
+const state = {
+  currentView: 'loading',
+  activeProjectId: null,
+  projects: [],
+  tasks: [],
+  teamMembers: [],
+  srfs: [],
+  kaizens: [],
+  isLoading: true,
+  theme: localStorage.getItem('tracker_theme') || 'dark',
+
+  // Dashboard
+  benefitsConverted: false,
+  selectedDept: null,
+
+  // Projects page
+  projectSearch: '',
+  projectDeptFilter: '',
+  projectStatusFilter: '',
+  projectSortBy: 'name',
+
+  // Workspace
+  workspaceTab: 'overview',
+  ganttScale: 'week',
+  taskAssigneeFilter: '',
+  selectedSRFIndex: 0,
+  editingTask: null,
+  editingSRF: null,
+};
+
+/* ============================================================
+   2. HELPERS
+   ============================================================ */
+function formatCurrency(value) {
+  return new Intl.NumberFormat('en-IN', {
+    style: 'currency', currency: 'INR', maximumFractionDigits: 0
+  }).format(value || 0);
+}
+
+function formatDate(dateStr) {
+  if (!dateStr) return 'N/A';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function formatDateShort(dateStr) {
+  if (!dateStr) return 'N/A';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function compareTaskIds(idA, idB) {
+  const partsA = String(idA).split('.').map(Number);
+  const partsB = String(idB).split('.').map(Number);
+  const maxLen = Math.max(partsA.length, partsB.length);
+  for (let i = 0; i < maxLen; i++) {
+    const vA = isNaN(partsA[i]) ? 0 : partsA[i];
+    const vB = isNaN(partsB[i]) ? 0 : partsB[i];
+    if (vA !== vB) return vA - vB;
+  }
+  return String(idA).localeCompare(String(idB));
+}
+
+function parseBenefits(benefitsStr) {
+  if (!benefitsStr) return { type: 'unknown', value: 0 };
+  const str = String(benefitsStr).trim();
+  const manDaysMatch = str.match(/^(\d+(?:\.\d+)?)\s*(?:man\s*days|mandays|man-days|md)$/i);
+  if (manDaysMatch) return { type: 'mandays', value: parseFloat(manDaysMatch[1]) };
+  const cleanStr = str.replace(/[₹$,\s]/g, '');
+  const num = parseFloat(cleanStr);
+  if (!isNaN(num)) return { type: 'cost', value: num };
+  return { type: 'text', value: 0 };
+}
+
+function getSavingsNum(benefitsStr) {
+  if (!benefitsStr) return 0;
+  const parsed = parseBenefits(benefitsStr);
+  if (parsed.type === 'mandays') return parsed.value * 2500;
+  return parsed.value;
+}
+
+function escHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function svgIcon(name, cls = '') {
+  return `<i data-lucide="${name}"${cls ? ` class="${cls}"` : ''}></i>`;
+}
+
+function getStatusBadgeClass(status) {
+  if (status === 'on-track') return 'badge badge-on-track';
+  if (status === 'delayed') return 'badge badge-delayed';
+  if (status === 'at-risk') return 'badge badge-at-risk';
+  if (status === 'completed') return 'badge badge-completed';
+  return 'badge';
+}
+
+function getStatusText(status) {
+  if (status === 'on-track') return 'On Track';
+  if (status === 'at-risk') return 'At Risk';
+  if (status === 'delayed') return 'On Going';
+  return status ? status.charAt(0).toUpperCase() + status.slice(1) : '';
+}
+
+function parseExcelDate(val) {
+  if (val === undefined || val === null || val === '') return '';
+  if (val instanceof Date) {
+    const year = val.getFullYear();
+    const month = String(val.getMonth() + 1).padStart(2, '0');
+    const day = String(val.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  const num = Number(val);
+  if (!isNaN(num) && num > 10000 && num < 100000) {
+    const date = new Date(Math.round((num - 25569) * 86400 * 1000));
+    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+  }
+  const str = String(val).trim();
+  if (!str) return '';
+  const d = new Date(str);
+  if (!isNaN(d.getTime())) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+  return str;
+}
+
+function getProp(obj, keys) {
+  if (!obj) return undefined;
+  for (const k of keys) {
+    if (obj[k] !== undefined) return obj[k];
+    const cleanK = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+    for (const key of Object.keys(obj)) {
+      if (cleanK === key.toLowerCase().replace(/[^a-z0-9]/g, '')) return obj[key];
+    }
+  }
+  return undefined;
+}
+
+/* ============================================================
+   3. EXCEL IMPORT (SheetJS)
+   ============================================================ */
+function parseExcelBuffer(buffer) {
+  const dataBytes = new Uint8Array(buffer);
+  const workbook = XLSX.read(dataBytes, { type: 'array', cellDates: true });
+
+  const projectSheetName = workbook.SheetNames.find(n =>
+    n.toLowerCase().includes('project details') || n.toLowerCase().includes('projectdetails') || n.toLowerCase() === 'projects'
+  ) || workbook.SheetNames[0];
+
+  const tasksSheetName = workbook.SheetNames.find(n =>
+    n.toLowerCase() === 'tasks' || n.toLowerCase().includes('task')
+  ) || workbook.SheetNames[1];
+
+  const membersSheetName = workbook.SheetNames.find(n =>
+    n.toLowerCase().includes('teammember') || n.toLowerCase().includes('team member') ||
+    n.toLowerCase().includes('user') || n.toLowerCase().includes('member')
+  );
+
+  const srfSheetName = workbook.SheetNames.find(n =>
+    n.toLowerCase().includes('srf') || n.toLowerCase().includes('procurement')
+  );
+
+  const sheetProjects = workbook.Sheets[projectSheetName];
+  const sheetTasks = workbook.Sheets[tasksSheetName];
+  const sheetMembers = membersSheetName ? workbook.Sheets[membersSheetName] : null;
+  const sheetSRF = srfSheetName ? workbook.Sheets[srfSheetName] : null;
+
+  if (!sheetProjects) throw new Error('Project Details worksheet not found.');
+
+  const projectRows = XLSX.utils.sheet_to_json(sheetProjects) || [];
+  const taskRows = sheetTasks ? XLSX.utils.sheet_to_json(sheetTasks) : [];
+  const membersRows = sheetMembers ? XLSX.utils.sheet_to_json(sheetMembers) : [];
+  const srfRows = sheetSRF ? XLSX.utils.sheet_to_json(sheetSRF) : [];
+
+  const projects = projectRows.map(row => ({
+    ID: String(getProp(row, ['Project id', 'ProjectID', 'ID']) || ''),
+    Name: String(getProp(row, ['Project Name', 'ProjectName', 'Name']) || ''),
+    Description: String(getProp(row, ['Project Description', 'ProjectDescription', 'Description']) || ''),
+    Department: String(getProp(row, ['Department', 'Dept']) || 'steel'),
+    Status: 'on-track', // Recalculated at runtime
+    Spent: Number(getProp(row, ['Project Spent', 'ProjectSpent', 'Spent']) || 0),
+    PlannedStartDate: parseExcelDate(getProp(row, ['Project Planned Start Date', 'ProjectPlannedStartDate', 'PlannedStartDate', 'StartDate']) || ''),
+    PlannedEndDate: parseExcelDate(getProp(row, ['Project Planned End Date', 'ProjectPlannedEndDate', 'PlannedEndDate', 'EndDate']) || ''),
+    ActualStartDate: parseExcelDate(getProp(row, ['Project Actual Start Date', 'ProjectActualStartDate', 'ActualStartDate']) || ''),
+    ActualEndDate: parseExcelDate(getProp(row, ['Project Actual End Date', 'ProjectActualEndDate', 'ActualEndDate']) || ''),
+    DaysDelayed: 0, // Recalculated at runtime
+    ProjectManager: String(getProp(row, ['Project Manager', 'ProjectManager', 'Manager']) || ''),
+    Progress: 0, // Recalculated at runtime
+    Benefits: String(getProp(row, ['Project Benefits', 'ProjectBenefits', 'Benefits', 'benifits']) || '')
+  })).filter(p => p.ID);
+
+  const tasks = taskRows.map(row => ({
+    ID: String(getProp(row, ['Task Id', 'TaskID', 'ID']) || ''),
+    ProjectID: String(getProp(row, ['Project id', 'ProjectID']) || ''),
+    Name: String(getProp(row, ['Task Name', 'TaskName', 'Name']) || ''),
+    PlannedStartDate: parseExcelDate(getProp(row, ['Task Planned Start Date', 'TaskPlannedStartDate', 'StartDate', 'PlannedStartDate']) || ''),
+    PlannedEndDate: parseExcelDate(getProp(row, ['Task Planned End Date', 'TaskPlannedEndDate', 'EndDate', 'PlannedEndDate']) || ''),
+    ActualStartDate: parseExcelDate(getProp(row, ['Task Actual Start Date', 'TaskActualStartDate', 'ActualStartDate']) || ''),
+    ActualEndDate: parseExcelDate(getProp(row, ['Task Actual End Date', 'TaskActualEndDate', 'ActualEndDate']) || ''),
+    Assignee: String(getProp(row, ['Task Assignee', 'TaskAssignee', 'Assignee']) || ''),
+    Status: 'not-started', // Recalculated at runtime
+    Progress: 0, // Recalculated at runtime
+    DaysDelayed: 0, // Recalculated at runtime
+    DelayReason: String(getProp(row, ['Task Delay Reason', 'TaskDelayReason', 'DelayReason', 'Reason']) || ''),
+    DelayImpact: String(getProp(row, ['Task Delay Impact', 'TaskDelayImpact', 'DelayImpact', 'Impact']) || ''),
+    DelayReportedBy: String(getProp(row, ['Task Delay Reported By', 'TaskDelayReportedBy', 'DelayReportedBy', 'ReportedBy']) || '')
+  })).filter(t => t.ID && t.ProjectID);
+
+  const teamMembers = membersRows.map(row => ({
+    id: String(getProp(row, ['id', 'ID']) || ''),
+    name: String(getProp(row, ['name', 'Name']) || ''),
+    role: String(getProp(row, ['role', 'Role']) || 'Specialist'),
+    department: String(getProp(row, ['department', 'Department', 'Dept']) || 'steel')
+  })).filter(m => m.id && m.name);
+
+  const srfs = srfRows.map(row => ({
+    ProjectID: String(getProp(row, ['Project id', 'ProjectID']) || ''),
+    SRFNo: String(getProp(row, ['SRF No', 'SRFNo', 'SRFNumber']) || ''),
+    Developments: String(getProp(row, ['Developments', 'Development']) || ''),
+    User: String(getProp(row, ['User', 'Requester']) || ''),
+    MandaysFC: Number(getProp(row, ['Mandays FC', 'MandaysFC', 'FC Mandays']) || 0),
+    MandaysTC: Number(getProp(row, ['Mandays TC', 'MandaysTC', 'TC Mandays']) || 0),
+    TotalMandays: Number(getProp(row, ['Total Mandays', 'TotalMandays']) || 0),
+    Cost: Number(getProp(row, ['Development Cost (INR)', 'DevelopmentCost', 'Cost']) || 0),
+    Status: String(getProp(row, ['Status', 'SRF Status']) || 'Uploaded On'),
+    UploadedOn: parseExcelDate(getProp(row, ['Uploaded On', 'UploadedOn']) || ''),
+    ApprovedOn: parseExcelDate(getProp(row, ['Approved On', 'ApprovedOn']) || ''),
+    ReceivedCCB: parseExcelDate(getProp(row, ['Received for CCB', 'ReceivedForCCB', 'Received CCB']) || ''),
+    SendCCB: parseExcelDate(getProp(row, ['Send for CCB', 'SendForCCB', 'Send CCB']) || ''),
+    CCBReceived: parseExcelDate(getProp(row, ['CCB Received On', 'CCBReceivedOn', 'CCB Received']) || ''),
+    CCBAttached: parseExcelDate(getProp(row, ['CCB Attached in CRS On', 'CCBAttachedInCRSOn', 'CCB Attached']) || ''),
+    FSDReceived: parseExcelDate(getProp(row, ['FSD Received On', 'FSDReceivedOn', 'FSD Received']) || ''),
+    FSDApproved: parseExcelDate(getProp(row, ['FSD Approved On', 'FSDApprovedOn', 'FSD Approved']) || ''),
+    ReceivedUAT: parseExcelDate(getProp(row, ['Received for UAT', 'ReceivedForUAT', 'Received UAT']) || ''),
+    ActualTestingApproval: parseExcelDate(getProp(row, ['Actual Testing & Approval', 'ActualTestingAndApproval', 'Testing Approval']) || ''),
+    SRFClose: parseExcelDate(getProp(row, ['SRF Close', 'SRFClose', 'Closed On']) || '')
+  })).filter(s => s.SRFNo);
+
+  const kaizenSheetName = workbook.SheetNames.find(n =>
+    n.toLowerCase() === 'kaizen' || n.toLowerCase().includes('kaizen')
+  );
+  const sheetKaizen = kaizenSheetName ? workbook.Sheets[kaizenSheetName] : null;
+  const kaizenRows = sheetKaizen ? XLSX.utils.sheet_to_json(sheetKaizen) : [];
+
+  const kaizens = kaizenRows.map(row => ({
+    ProjectID: String(getProp(row, ['Project id', 'ProjectID']) || ''),
+    ID: String(getProp(row, ['Kaizen Id', 'KaizenID', 'ID']) || ''),
+    Title: String(getProp(row, ['Title', 'Description', 'Kaizen Title']) || ''),
+    UploadedOn: parseExcelDate(getProp(row, ['Uploaded On', 'UploadedOn']) || ''),
+    ApprovedL1: parseExcelDate(getProp(row, ['Approved by L+1', 'ApprovedByL1', 'ApprovedL1']) || ''),
+    ApprovedL2: parseExcelDate(getProp(row, ['Approved by L+2', 'ApprovedByL2', 'ApprovedL2']) || ''),
+    Grade: String(getProp(row, ['Grade', 'grade']) || 'L1')
+  })).filter(k => k.ID && k.ProjectID);
+
+  return { projects, tasks, teamMembers, srfs, kaizens };
+}
+
+/* ============================================================
+   4. EXCEL EXPORT (ExcelJS)
+   ============================================================ */
+async function exportExcelWorkbook(stateSnapshot) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'NavaGator Enterprise Tracker';
+  wb.created = new Date();
+
+  const styleWS = (ws, tableName, columns, rows, cellFormats = {}) => {
+    ws.views = [{ showGridLines: true }];
+    const safeRows = rows.length > 0 ? rows : [Array(columns.length).fill('')];
+    ws.addTable({
+      name: tableName,
+      ref: 'A1',
+      headerRow: true,
+      totalsRow: false,
+      style: { theme: 'TableStyleMedium9', showRowStripes: true },
+      columns: columns.map(col => ({ name: col, filterButton: true })),
+      rows: safeRows
+    });
+    const headerRow = ws.getRow(1);
+    headerRow.height = 26;
+    headerRow.eachCell(cell => {
+      cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+      cell.alignment = { vertical: 'middle', horizontal: 'left' };
+      cell.border = { bottom: { style: 'medium', color: { argb: 'FF0F172A' } } };
+    });
+    for (let r = 2; r <= safeRows.length + 1; r++) {
+      const row = ws.getRow(r);
+      row.height = 20;
+      row.eachCell((cell, colNumber) => {
+        const colName = columns[colNumber - 1];
+        cell.font = { name: 'Segoe UI', size: 10 };
+        cell.alignment = { vertical: 'middle', horizontal: 'left' };
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+        };
+        if (cellFormats[colName]) {
+          const fmt = cellFormats[colName];
+          if (fmt.type === 'currency') {
+            cell.numFmt = '₹#,##,##0';
+            cell.alignment = { vertical: 'middle', horizontal: 'right' };
+            if (typeof cell.value === 'string') {
+              const v = parseFloat(cell.value.replace(/[^\d.-]/g, ''));
+              if (!isNaN(v)) cell.value = v;
+            }
+          } else if (fmt.type === 'number') {
+            cell.numFmt = '#,##0';
+            cell.alignment = { vertical: 'middle', horizontal: 'right' };
+          } else if (fmt.type === 'date') {
+            cell.alignment = { vertical: 'middle', horizontal: 'center' };
+          } else if (fmt.type === 'progress') {
+            cell.numFmt = '0"%"';
+            cell.alignment = { vertical: 'middle', horizontal: 'right' };
+          }
+        }
+      });
+    }
+    columns.forEach((col, i) => {
+      const colCells = ws.getColumn(i + 1);
+      let maxLen = col.length;
+      colCells.eachCell({ includeEmpty: true }, cell => {
+        const v = String(cell.value || '');
+        if (v.length > maxLen) maxLen = v.length;
+      });
+      ws.getColumn(i + 1).width = Math.min(45, Math.max(12, maxLen + 3));
+    });
+  };
+
+  // Projects sheet
+  const wsP = wb.addWorksheet('Project Details');
+  const projCols = ['Project id','Project Name','Project Description','Project Planned Start Date','Project Planned End Date','Project Spent','Project Manager','Department','Project Actual Start Date','Project Actual End Date','Project Benefits'];
+  const projRows = stateSnapshot.projects.map(p => [p.ID,p.Name,p.Description,p.PlannedStartDate,p.PlannedEndDate,p.Spent,p.ProjectManager,p.Department,p.ActualStartDate,p.ActualEndDate,p.Benefits||'']);
+  styleWS(wsP, 'ProjectsTable', projCols, projRows, {'Project Spent':{type:'currency'},'Project Planned Start Date':{type:'date'},'Project Planned End Date':{type:'date'},'Project Actual Start Date':{type:'date'},'Project Actual End Date':{type:'date'}});
+
+  // Tasks sheet
+  const wsT = wb.addWorksheet('Tasks');
+  const taskCols = ['Project id','Task Id','Task Name','Task Planned Start Date','Task Planned End Date','Task Actual Start Date','Task Actual End Date','Task Assignee','Task Delay Reason','Task Delay Impact','Task Delay Reported By'];
+  const taskRowsData = stateSnapshot.tasks.map(t => [t.ProjectID,t.ID,t.Name,t.PlannedStartDate,t.PlannedEndDate,t.ActualStartDate,t.ActualEndDate,t.Assignee||'',t.DelayReason||'',t.DelayImpact||'',t.DelayReportedBy||'']);
+  styleWS(wsT, 'TasksTable', taskCols, taskRowsData, {'Task Planned Start Date':{type:'date'},'Task Planned End Date':{type:'date'},'Task Actual Start Date':{type:'date'},'Task Actual End Date':{type:'date'}});
+
+  // Members sheet
+  const wsM = wb.addWorksheet('TeamMembers');
+  styleWS(wsM, 'MembersTable', ['id','name','role','department'], stateSnapshot.teamMembers.map(m => [m.id,m.name,m.role,m.department]));
+
+  // SRF sheet
+  const wsSRF = wb.addWorksheet('SRF Summary');
+  const srfCols = ['Project id','SRF No','Developments','User','Mandays FC','Mandays TC','Total Mandays','Development Cost (INR)','Status','Uploaded On','Approved On','Received for CCB','Send for CCB','CCB Received On','CCB Attached in CRS On','FSD Received On','FSD Approved On','Received for UAT','Actual Testing & Approval','SRF Close'];
+  const srfData = stateSnapshot.srfs.map(s => [s.ProjectID,s.SRFNo,s.Developments,s.User,s.MandaysFC||0,s.MandaysTC||0,(s.MandaysFC||0)+(s.MandaysTC||0),s.Cost||0,s.Status||'Uploaded On',s.UploadedOn,s.ApprovedOn,s.ReceivedCCB,s.SendCCB,s.CCBReceived,s.CCBAttached,s.FSDReceived,s.FSDApproved,s.ReceivedUAT,s.ActualTestingApproval,s.SRFClose]);
+  styleWS(wsSRF, 'SRFTable', srfCols, srfData, {'Mandays FC':{type:'number'},'Mandays TC':{type:'number'},'Total Mandays':{type:'number'},'Development Cost (INR)':{type:'currency'},'Uploaded On':{type:'date'},'Approved On':{type:'date'},'Received for CCB':{type:'date'},'Send for CCB':{type:'date'},'CCB Received On':{type:'date'},'CCB Attached in CRS On':{type:'date'},'FSD Received On':{type:'date'},'FSD Approved On':{type:'date'},'Received for UAT':{type:'date'},'Actual Testing & Approval':{type:'date'},'SRF Close':{type:'date'}});
+
+  // Kaizen sheet
+  const wsK = wb.addWorksheet('Kaizen');
+  const kaizenCols = ['Project id','Kaizen Id','Title','Uploaded On','Approved by L+1','Approved by L+2','Grade'];
+  const kaizenRowsData = (stateSnapshot.kaizens || []).map(k => [k.ProjectID,k.ID,k.Title,k.UploadedOn||'',k.ApprovedL1||'',k.ApprovedL2||'',k.Grade||'L1']);
+  styleWS(wsK, 'KaizenTable', kaizenCols, kaizenRowsData, {'Uploaded On':{type:'date'},'Approved by L+1':{type:'date'},'Approved by L+2':{type:'date'}});
+
+  return wb.xlsx.writeBuffer();
+}
+
+/* ============================================================
+   5. PROJECT ROLLUPS
+   ============================================================ */
+function performProjectRollups(projId, currentTasks, currentProjects, currentSrfs) {
+  currentSrfs = currentSrfs || state.srfs;
+  const projTasks = currentTasks.filter(t => t.ProjectID === projId);
+
+  const today = new Date(); today.setHours(0,0,0,0);
+  const todayStr = today.toISOString().split('T')[0];
+
+  const taskIds = projTasks.map(t => t.ID);
+  const isLeaf = (id) => !taskIds.some(otherId => otherId.startsWith(id + '.'));
+
+  // Calculate status, progress, delay for leaf tasks
+  projTasks.forEach(t => {
+    if (isLeaf(t.ID)) {
+      // Ensure ActualStartDate is set if progress exists
+      if (!t.ActualStartDate && (t.Progress > 0 || t.Status === 'in-progress' || t.ActualEndDate)) {
+        t.ActualStartDate = t.PlannedStartDate || todayStr;
+      }
+
+      let status = 'not-started';
+      let progress = t.Progress || 0;
+
+      if (t.ActualEndDate) {
+        status = 'completed';
+        progress = 100;
+      } else if (t.ActualStartDate) {
+        status = 'in-progress';
+        if (t.PlannedStartDate && t.PlannedEndDate) {
+          const totalDays = Math.max(0, Math.round((new Date(t.PlannedEndDate) - new Date(t.PlannedStartDate)) / 86400000));
+          const daysSpent = Math.max(0, Math.round((today - new Date(t.ActualStartDate)) / 86400000));
+          if (totalDays > 0) {
+            progress = Math.min(95, Math.max(10, Math.round((daysSpent / totalDays) * 100)));
+          } else {
+            progress = 50;
+          }
+        } else {
+          progress = Math.max(50, progress);
+        }
+      } else {
+        progress = 0;
+      }
+
+      let daysDelayed = 0;
+      if (t.ActualEndDate && t.PlannedEndDate && new Date(t.ActualEndDate) > new Date(t.PlannedEndDate)) {
+        daysDelayed = Math.max(0, Math.round((new Date(t.ActualEndDate) - new Date(t.PlannedEndDate)) / 86400000));
+      } else if (!t.ActualEndDate && t.PlannedEndDate && today > new Date(t.PlannedEndDate)) {
+        daysDelayed = Math.max(0, Math.round((today - new Date(t.PlannedEndDate)) / 86400000));
+      }
+
+      if (daysDelayed > 0) {
+        status = 'delayed';
+        t.DaysDelayed = daysDelayed;
+        if (!t.DelayReason) t.DelayReason = 'Operational bottlenecks and resource allocation delays.';
+        if (!t.DelayImpact) t.DelayImpact = 'Pushed back downstream task completions.';
+        if (!t.DelayReportedBy) t.DelayReportedBy = t.Assignee || 'Project Manager';
+      } else {
+        t.DaysDelayed = 0;
+      }
+
+      t.Status = status;
+      t.Progress = progress;
+    }
+  });
+
+  // Roll up to parent tasks (bottom-up)
+  const sortedTasks = [...projTasks].sort((a, b) => {
+    return String(b.ID).split('.').length - String(a.ID).split('.').length;
+  });
+
+  sortedTasks.forEach(parent => {
+    const children = projTasks.filter(child => {
+      const pp = String(parent.ID).split('.');
+      const cp = String(child.ID).split('.');
+      if (cp.length === pp.length + 1) {
+        return cp.slice(0, pp.length).join('.') === parent.ID;
+      }
+      return false;
+    });
+    if (children.length > 0) {
+      const totalProgress = children.reduce((s, c) => s + (c.Progress || 0), 0);
+      parent.Progress = Math.round(totalProgress / children.length);
+      if (parent.Progress === 100) {
+        parent.Status = 'completed';
+        if (!parent.ActualEndDate) {
+          const childrenEnds = children.map(c => c.ActualEndDate).filter(Boolean);
+          parent.ActualEndDate = childrenEnds.length > 0 ? childrenEnds.sort().reverse()[0] : todayStr;
+        }
+        if (!parent.ActualStartDate) {
+          const childrenStarts = children.map(c => c.ActualStartDate).filter(Boolean);
+          parent.ActualStartDate = childrenStarts.length > 0 ? childrenStarts.sort()[0] : todayStr;
+        }
+      } else {
+        parent.ActualEndDate = '';
+        if (parent.Progress > 0) {
+          parent.Status = 'in-progress';
+          if (!parent.ActualStartDate) {
+            const childrenStarts = children.map(c => c.ActualStartDate).filter(Boolean);
+            parent.ActualStartDate = childrenStarts.length > 0 ? childrenStarts.sort()[0] : todayStr;
+          }
+        } else {
+          parent.Status = 'not-started';
+          parent.ActualStartDate = '';
+        }
+      }
+      
+      const maxChildDelay = children.reduce((max, c) => Math.max(max, c.DaysDelayed || 0), 0);
+      parent.DaysDelayed = maxChildDelay;
+      if (maxChildDelay > 0) parent.Status = 'delayed';
+      
+      if (children.some(c => c.Status === 'blocked')) parent.Status = 'blocked';
+    }
+  });
+
+  const updatedProjects = currentProjects.map(p => {
+    if (p.ID !== projId) return p;
+    const rootTasks = projTasks.filter(t => !String(t.ID).includes('.'));
+    const targetTasks = rootTasks.length > 0 ? rootTasks : projTasks;
+    let calculatedProgress = p.Progress;
+    if (targetTasks.length > 0) {
+      calculatedProgress = Math.round(targetTasks.reduce((s, t) => s + (t.Progress || 0), 0) / targetTasks.length);
+    }
+    const plannedEnd = p.PlannedEndDate ? new Date(p.PlannedEndDate) : null;
+    let projectDelayDays = 0;
+    if (!p.ActualEndDate && plannedEnd && today > plannedEnd && calculatedProgress < 100) {
+      projectDelayDays = Math.max(0, Math.round((today - plannedEnd) / 86400000));
+    }
+    const maxTaskDelay = targetTasks.reduce((max, t) => Math.max(max, t.DaysDelayed || 0), 0);
+    const finalDelayDays = Math.max(projectDelayDays, maxTaskDelay);
+    let status = p.Status;
+    if (calculatedProgress === 100 || p.ActualEndDate) status = 'completed';
+    else if (finalDelayDays > 0) status = 'delayed';
+    else if (status !== 'at-risk') status = 'on-track';
+
+    const linkedSRFs = currentSrfs.filter(s => s.ProjectID === projId);
+    const totalSRFCost = linkedSRFs.reduce((s, sr) => s + (sr.Cost || 0), 0);
+    const baseSpent = p.BaseSpent !== undefined ? p.BaseSpent : (p.Spent || 0);
+    const finalSpent = baseSpent + totalSRFCost;
+
+    return { ...p, Progress: calculatedProgress, Spent: finalSpent, DaysDelayed: finalDelayDays, Status: status };
+  });
+
+  return { updatedTasks: currentTasks, updatedProjects };
+}
+
+function initBaseSpent() {
+  state.projects.forEach(p => {
+    const projectSRFs = state.srfs.filter(s => s.ProjectID === p.ID);
+    const totalSRFCost = projectSRFs.reduce((sum, sr) => sum + (sr.Cost || 0), 0);
+    p.BaseSpent = Math.max(0, (p.Spent || 0) - totalSRFCost);
+  });
+}
+
+function recalculateAll() {
+  state.projects.forEach(p => {
+    const { updatedTasks, updatedProjects } = performProjectRollups(p.ID, state.tasks, state.projects, state.srfs);
+    state.tasks = updatedTasks;
+    state.projects = updatedProjects;
+  });
+}
+
+/* ============================================================
+   6. API / DATA LOADING
+   ============================================================ */
+async function initDatabase() {
+  state.isLoading = true;
+  render();
+  try {
+    const response = await fetch('/api/load-database');
+    if (response.ok) {
+      const arrayBuffer = await response.arrayBuffer();
+      const parsed = parseExcelBuffer(arrayBuffer);
+      state.projects = parsed.projects || [];
+      state.tasks = parsed.tasks || [];
+      state.teamMembers = parsed.teamMembers || [];
+      state.srfs = parsed.srfs || [];
+      state.kaizens = parsed.kaizens || [];
+      initBaseSpent();
+      recalculateAll();
+      state.currentView = state.projects.length > 0 ? 'dashboard' : 'empty';
+    } else {
+      const fallback = localStorage.getItem('tracker_state');
+      if (fallback) {
+        const parsed = JSON.parse(fallback);
+        state.projects = parsed.projects || [];
+        state.tasks = parsed.tasks || [];
+        state.teamMembers = parsed.teamMembers || [];
+        state.srfs = parsed.srfs || [];
+        state.kaizens = parsed.kaizens || [];
+        initBaseSpent();
+        recalculateAll();
+        state.currentView = state.projects.length > 0 ? 'dashboard' : 'empty';
+        showToast('Loaded database from local cache', 'info');
+      } else {
+        state.currentView = 'empty';
+      }
+    }
+  } catch (err) {
+    console.error('Init error:', err);
+    const fallback = localStorage.getItem('tracker_state');
+    if (fallback) {
+      try {
+        const parsed = JSON.parse(fallback);
+        state.projects = parsed.projects || [];
+        state.tasks = parsed.tasks || [];
+        state.teamMembers = parsed.teamMembers || [];
+        state.srfs = parsed.srfs || [];
+        state.kaizens = parsed.kaizens || [];
+        initBaseSpent();
+        recalculateAll();
+        state.currentView = state.projects.length > 0 ? 'dashboard' : 'empty';
+        showToast('Loaded from local cache (offline mode)', 'info');
+      } catch {}
+    } else {
+      state.currentView = 'empty';
+    }
+  } finally {
+    state.isLoading = false;
+    render();
+  }
+}
+
+async function saveStateToServer(projects, tasks, teamMembers, srfs, kaizens = state.kaizens) {
+  const snap = { projects, tasks, teamMembers, srfs, kaizens };
+  localStorage.setItem('tracker_state', JSON.stringify(snap));
+  try {
+    const excelBuffer = await exportExcelWorkbook(snap);
+    const blob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const reader = new FileReader();
+    reader.readAsDataURL(blob);
+    reader.onloadend = async () => {
+      const base64data = reader.result.split(',')[1];
+      try {
+        const res = await fetch('/api/save-database', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fileData: base64data })
+        });
+        if (res.ok) showToast('Autosaved to database.xlsx');
+      } catch (e) { console.warn('Autosave fetch failed:', e); }
+    };
+  } catch (err) { console.error('Failed to generate workbook:', err); }
+}
+
+/* ============================================================
+   7. TOAST
+   ============================================================ */
+let _toastTimer = null;
+function showToast(message, type = 'success') {
+  const el = document.getElementById('app-toast');
+  if (!el) return;
+  el.className = `toast visible ${type}`;
+  el.innerHTML = `${svgIcon(type === 'error' ? 'alert-circle' : 'check-circle-2')} <span>${escHtml(message)}</span>`;
+  lucide.createIcons({ nodes: [el] });
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { el.className = 'toast'; }, 3000);
+}
+
+/* ============================================================
+   8. THEME
+   ============================================================ */
+function applyTheme() {
+  const root = document.documentElement;
+  if (state.theme === 'dark') {
+    root.classList.add('dark');
+    root.classList.remove('light');
+  } else {
+    root.classList.add('light');
+    root.classList.remove('dark');
+  }
+  localStorage.setItem('tracker_theme', state.theme);
+  const btn = document.getElementById('theme-btn');
+  if (btn) {
+    btn.innerHTML = svgIcon(state.theme === 'dark' ? 'sun' : 'moon');
+    lucide.createIcons({ nodes: [btn] });
+  }
+}
+
+/* ============================================================
+   9. NAVIGATION
+   ============================================================ */
+function navigateTo(view, projectId = null) {
+  state.currentView = view;
+  if (projectId !== null) state.activeProjectId = projectId;
+  if (view === 'workspace') {
+    state.workspaceTab = 'overview';
+    state.taskAssigneeFilter = '';
+    state.selectedSRFIndex = 0;
+  }
+  render();
+}
+
+function updateNav() {
+  document.querySelectorAll('.nav-btn').forEach(btn => {
+    const v = btn.dataset.view;
+    const isSelected = state.currentView === v || (v === 'projects' && state.currentView === 'workspace');
+    btn.classList.toggle('active', isSelected);
+  });
+
+  const noData = state.projects.length === 0;
+  document.querySelectorAll('.nav-btn[data-view]').forEach(btn => {
+    const v = btn.dataset.view;
+    if (v !== 'empty') btn.disabled = noData;
+  });
+
+  // Update header title
+  const header = document.getElementById('main-header-title');
+  if (header) {
+    const titles = {
+      dashboard: 'Analytical Dashboard',
+      projects: 'Project Registry',
+      workspace: 'Project Workspace Control',
+      team: 'Team Workloads Index',
+      empty: 'Database Setup'
+    };
+    header.textContent = titles[state.currentView] || '';
+  }
+
+  // Show/hide create project btn
+  const createBtn = document.getElementById('create-project-btn');
+  if (createBtn) {
+    const show = state.projects.length > 0 && state.currentView !== 'workspace';
+    createBtn.style.display = show ? 'inline-flex' : 'none';
+  }
+}
+
+/* ============================================================
+   10. MAIN RENDER
+   ============================================================ */
+function render() {
+  updateNav();
+  const container = document.getElementById('view-container');
+  if (!container) return;
+
+  if (state.isLoading) {
+    container.innerHTML = `
+      <div class="loading-state">
+        <div class="spinner"></div>
+        <span style="color:var(--text-muted);font-size:12px;font-weight:500">Mounting workspace spreadsheet...</span>
+      </div>`;
+    return;
+  }
+
+  switch (state.currentView) {
+    case 'dashboard': renderDashboard(container); break;
+    case 'projects':  renderProjects(container); break;
+    case 'workspace': renderWorkspace(container); break;
+    case 'team':      renderTeam(container); break;
+    case 'empty':
+    default:          renderEmpty(container); break;
+  }
+
+  lucide.createIcons();
+  setupViewEvents();
+}
+
+/* ============================================================
+   11. DASHBOARD
+   ============================================================ */
+function renderDashboard(container) {
+  const dp = state.selectedDept ? state.projects.filter(p => p.Department === state.selectedDept) : state.projects;
+  const total = dp.length;
+  const completed = dp.filter(p => p.Status === 'completed').length;
+  const active = dp.filter(p => p.Status !== 'completed').length;
+  const sc = {
+    completed,
+    'on-track': dp.filter(p => p.Status === 'on-track').length,
+    delayed: dp.filter(p => p.Status === 'delayed').length,
+    'at-risk': dp.filter(p => p.Status === 'at-risk').length
+  };
+
+  // Benefits
+  let totalFinancial = 0, totalManDays = 0;
+  dp.forEach(p => {
+    const parsed = parseBenefits(p.Benefits);
+    if (parsed.type === 'cost') totalFinancial += parsed.value;
+    else if (parsed.type === 'mandays') totalManDays += parsed.value;
+  });
+  const convertedMD = totalManDays * 2500;
+  const displaySavings = state.benefitsConverted ? totalFinancial + convertedMD : totalFinancial;
+  const displayMD = state.benefitsConverted ? 0 : totalManDays;
+
+  // Department counts
+  const deptCounts = {};
+  state.projects.forEach(p => {
+    const d = p.Department || 'Steel';
+    deptCounts[d] = (deptCounts[d] || 0) + 1;
+  });
+  const deptList = Object.keys(deptCounts).sort((a, b) => deptCounts[b] - deptCounts[a]);
+
+  // Donut SVG
+  const donutSVG = buildDonutSVG(sc, total);
+
+  // Benefits breakdown
+  const benefitRows = dp.filter(p => p.Benefits).map(p => {
+    const parsed = parseBenefits(p.Benefits);
+    let badgeText = escHtml(p.Benefits);
+    let badgeClass = 'badge';
+    if (parsed.type === 'cost') { badgeText = escHtml(formatCurrency(parsed.value)); badgeClass = 'badge badge-emerald'; }
+    else if (parsed.type === 'mandays') {
+      badgeText = state.benefitsConverted ? escHtml(formatCurrency(parsed.value * 2500)) : `${parsed.value} Man-Days`;
+      badgeClass = state.benefitsConverted ? 'badge badge-emerald' : 'badge badge-blue';
+    }
+    return `<div class="benefit-row" data-proj-id="${escHtml(p.ID)}">
+      <div class="min-w-0 flex-1" style="padding-right:12px">
+        <div style="font-size:12px;font-weight:600;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(p.Name)}</div>
+        <div style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.05em;margin-top:2px">${escHtml(p.Department)}</div>
+      </div>
+      <span class="${badgeClass}" style="font-size:10px;padding:2px 10px">${badgeText}</span>
+    </div>`;
+  }).join('') || `<div class="text-center py-8 text-dim" style="font-size:12px">No project benefits logged yet for this filter.</div>`;
+
+  // Dept filter items
+  const deptItems = deptList.map(dept => {
+    const count = deptCounts[dept];
+    const ratio = Math.round((count / (state.projects.length || 1)) * 100);
+    const isActive = state.selectedDept === dept;
+    return `<div class="dept-item ${isActive ? 'active' : ''}" data-dept="${escHtml(dept)}">
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;font-weight:600">
+        <span style="text-transform:capitalize;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:150px" title="${escHtml(dept)}">${escHtml(dept)}</span>
+        <span style="font-size:10px;background:var(--slate-950);padding:2px 6px;border-radius:4px;border:1px solid var(--slate-850);color:var(--text-secondary);font-weight:700">${count} proj</span>
+      </div>
+      <div class="dept-bar-track"><div class="dept-bar-fill" style="width:${ratio}%"></div></div>
+    </div>`;
+  }).join('');
+
+  // Project list rows
+  const projRows = dp.map(p => {
+    const statusClass = p.Status === 'delayed' ? 'badge-delayed' : p.Status === 'at-risk' ? 'badge-at-risk' : p.Status === 'completed' ? 'badge-completed' : 'badge-on-track';
+    const progressFill = p.Status === 'completed' ? 'var(--brand-500)' : p.Status === 'delayed' ? 'var(--amber-500)' : p.Status === 'at-risk' ? 'var(--rose-500)' : 'var(--emerald-500)';
+    return `<div class="project-list-row" data-proj-id="${escHtml(p.ID)}">
+      <div class="min-w-0 flex-1">
+        <div class="proj-name" style="font-size:12px;font-weight:700;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:color 0.2s">${escHtml(p.Name)}</div>
+        <div style="font-size:10px;color:var(--text-dim);margin-top:2px;text-transform:capitalize">PM: ${escHtml(p.ProjectManager || 'Unassigned')} • ${escHtml(p.Department)}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:16px;flex-shrink:0">
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+          <span style="font-size:10px;color:var(--text-muted)">Progress: <span style="font-weight:700;color:white">${p.Progress || 0}%</span></span>
+          <div class="progress-track h-1" style="width:80px"><div class="progress-fill" style="height:100%;border-radius:999px;background:${progressFill};width:${p.Progress || 0}%"></div></div>
+        </div>
+        <span class="badge ${statusClass}">${escHtml(getStatusText(p.Status))}</span>
+      </div>
+    </div>`;
+  }).join('') || `<div class="text-center py-12 text-dim" style="font-size:12px">No projects belong to this department.</div>`;
+
+  container.innerHTML = `
+  <div class="space-y-6 animate-fade-in">
+    
+    ${state.selectedDept ? `
+    <div class="filter-banner">
+      <span style="display:flex;align-items:center;gap:8px">
+        ${svgIcon('building-2', 'w-4 h-4')}
+        Active Filter: <strong style="text-transform:capitalize;margin-left:4px">${escHtml(state.selectedDept)}</strong>&nbsp;Department (${total} projects)
+      </span>
+      <button id="clear-dept-filter" style="padding:4px 10px;background:rgba(129,0,85,0.2);color:var(--brand-300);font-weight:700;border-radius:8px;border:1px solid rgba(129,0,85,0.3);cursor:pointer;font-size:11px;transition:all 0.2s">Clear Filter</button>
+    </div>` : ''}
+
+    <!-- KPI Row -->
+    <div class="grid grid-3">
+      <div class="glass-card kpi-card border-brand" style="border-radius:var(--r-2xl)">
+        <div class="kpi-icon brand">${svgIcon('folder-kanban')}</div>
+        <div><div class="kpi-label">Total Projects</div><div class="kpi-value">${total}</div></div>
+      </div>
+      <div class="glass-card kpi-card border-amber" style="border-radius:var(--r-2xl)">
+        <div class="kpi-icon amber">${svgIcon('play')}</div>
+        <div><div class="kpi-label">Active Projects</div><div class="kpi-value">${active}</div></div>
+      </div>
+      <div class="glass-card kpi-card border-emerald" style="border-radius:var(--r-2xl)">
+        <div class="kpi-icon emerald">${svgIcon('check-circle-2')}</div>
+        <div><div class="kpi-label">Completed Projects</div><div class="kpi-value">${completed}</div></div>
+      </div>
+    </div>
+
+    <!-- Health + Benefits Row -->
+    <div class="grid grid-12">
+      <!-- Portfolio Health -->
+      <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between min-h-350 col-span-5" style="border:1px solid var(--slate-900)">
+        <div>
+          <h3 class="panel-title mb-6"><span class="dot"></span> Project Portfolio Health</h3>
+          <div class="donut-wrap">
+            <div class="donut-container">${donutSVG}
+              <div class="donut-center">
+                <span class="count">${total}</span>
+                <span class="label">Projects</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="legend-grid">
+          <div class="legend-item text-emerald"><span class="legend-dot" style="background:var(--emerald-500)"></span>On Track (${sc['on-track']})</div>
+          <div class="legend-item text-blue"><span class="legend-dot" style="background:var(--brand-500)"></span>Completed (${sc.completed})</div>
+          <div class="legend-item" style="color:var(--amber-400)"><span class="legend-dot" style="background:var(--amber-500)"></span>Delayed (${sc.delayed})</div>
+          <div class="legend-item" style="color:var(--rose-400)"><span class="legend-dot" style="background:var(--rose-500)"></span>At Risk (${sc['at-risk']})</div>
+        </div>
+      </div>
+
+      <!-- Benefits Widget -->
+      <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between min-h-350 col-span-7" style="border:1px solid var(--slate-900)">
+        <div class="space-y-4 w-full">
+          <h3 class="panel-title">
+            ${svgIcon('trending-up')} Project Benefits &amp; Savings
+          </h3>
+          <div class="benefit-kpi-grid">
+            <div class="benefit-kpi-card ${state.benefitsConverted ? 'active-emerald' : 'inactive'}" id="btn-convert-financial" title="Convert man-days to INR">
+              <div class="benefit-kpi-icon ${state.benefitsConverted ? 'emerald' : 'muted'}">${svgIcon('indian-rupee')}</div>
+              <div>
+                <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:var(--text-muted)">Financial Savings</div>
+                <div style="font-size:15px;font-weight:700;color:white;margin-top:2px">${escHtml(formatCurrency(displaySavings))}</div>
+              </div>
+            </div>
+            <div class="benefit-kpi-card ${!state.benefitsConverted ? 'active-brand' : 'inactive'}" id="btn-show-mandays" title="Show original man-days">
+              <div class="benefit-kpi-icon ${!state.benefitsConverted ? 'brand' : 'muted'}">${svgIcon('calendar-days')}</div>
+              <div>
+                <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:var(--text-muted)">Man-Days Saved</div>
+                <div style="font-size:15px;font-weight:700;color:white;margin-top:2px">${displayMD} Days</div>
+              </div>
+            </div>
+          </div>
+          <div class="benefit-breakdown">${benefitRows}</div>
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);text-align:center;margin-top:12px;padding-top:8px;border-top:1px solid var(--slate-900);width:100%">
+          * Click cards above to toggle conversion. Rate: ₹2,500 per day.
+        </div>
+      </div>
+    </div>
+
+    <!-- Dept Filter + Project List Row -->
+    <div class="grid grid-12">
+      <!-- Departments -->
+      <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between min-h-420 col-span-4" style="border:1px solid var(--slate-900)">
+        <div class="space-y-4">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <h3 class="panel-title">${svgIcon('building-2')} Departments</h3>
+            ${state.selectedDept ? `<button id="clear-dept-filter2" style="font-size:12px;color:var(--brand-300);font-weight:700;background:none;border:none;cursor:pointer">Clear Filter</button>` : ''}
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px;max-height:310px;overflow-y:auto;padding-right:4px">${deptItems}</div>
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);text-align:center;margin-top:12px;padding-top:8px;border-top:1px solid var(--slate-900)">
+          Click department to filter active views &amp; projects
+        </div>
+      </div>
+
+      <!-- Projects List -->
+      <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between min-h-420 col-span-8" style="border:1px solid var(--slate-900)">
+        <div class="space-y-4 flex-1 flex flex-col">
+          <h3 class="panel-title">
+            ${svgIcon('folder-kanban')}
+            ${state.selectedDept ? `Projects in <span style="color:var(--brand-300);text-transform:capitalize;margin-left:4px">${escHtml(state.selectedDept)}</span>` : 'All Active Projects Registry'}
+          </h3>
+          <div style="display:flex;flex-direction:column;gap:8px;max-height:310px;overflow-y:auto;padding-right:4px">${projRows}</div>
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);text-align:center;margin-top:12px;padding-top:8px;border-top:1px solid var(--slate-900)">
+          Click on any project card to open its workspace
+        </div>
+      </div>
+    </div>
+
+  </div>`;
+}
+
+function buildDonutSVG(sc, total) {
+  if (total === 0) {
+    return `<svg class="w-full h-full" viewBox="0 0 36 36" style="transform:rotate(-90deg)">
+      <circle cx="18" cy="18" r="15.915" fill="none" stroke="#1c0617" stroke-width="3"/>
+    </svg>`;
+  }
+  let offset = 0;
+  const segments = [
+    { count: sc.completed,    color: '#810055' },
+    { count: sc['on-track'],  color: '#10b981' },
+    { count: sc.delayed,      color: '#f59e0b' },
+    { count: sc['at-risk'],   color: '#f43f5e' },
+  ];
+  let paths = `<circle cx="18" cy="18" r="15.915" fill="none" stroke="#111827" stroke-width="3"/>`;
+  segments.forEach(seg => {
+    if (seg.count <= 0) return;
+    const pct = (seg.count / total) * 100;
+    paths += `<circle cx="18" cy="18" r="15.915" fill="none" stroke="${seg.color}" stroke-width="3.5"
+      stroke-dasharray="${pct} ${100 - pct}"
+      stroke-dashoffset="${-offset}"/>`;
+    offset += pct;
+  });
+  return `<svg class="w-full h-full" viewBox="0 0 36 36" style="transform:rotate(-90deg)">${paths}</svg>`;
+}
+
+/* ============================================================
+   12. PROJECTS PAGE
+   ============================================================ */
+function renderProjects(container) {
+  const departments = [...new Set(state.projects.map(p => p.Department).filter(Boolean))];
+
+  let filtered = state.projects.filter(p => {
+    const q = state.projectSearch.toLowerCase();
+    const matchQ = p.Name.toLowerCase().includes(q) || p.Description.toLowerCase().includes(q) ||
+      (p.ProjectManager && p.ProjectManager.toLowerCase().includes(q)) || p.Department.toLowerCase().includes(q);
+    const matchDept = state.projectDeptFilter ? p.Department === state.projectDeptFilter : true;
+    const matchStatus = state.projectStatusFilter ? p.Status === state.projectStatusFilter : true;
+    return matchQ && matchDept && matchStatus;
+  }).sort((a, b) => {
+    if (state.projectSortBy === 'name') return a.Name.localeCompare(b.Name);
+    if (state.projectSortBy === 'date') {
+      const dA = a.PlannedStartDate ? new Date(a.PlannedStartDate) : new Date(0);
+      const dB = b.PlannedStartDate ? new Date(b.PlannedStartDate) : new Date(0);
+      return dB - dA;
+    }
+    if (state.projectSortBy === 'progress') return b.Progress - a.Progress;
+    if (state.projectSortBy === 'savings') return getSavingsNum(b.Benefits) - getSavingsNum(a.Benefits);
+    return 0;
+  });
+
+  const cards = filtered.length > 0 ? filtered.map(proj => {
+    let statusText = getStatusText(proj.Status);
+    let statusClass = proj.Status === 'delayed' ? 'badge-delayed' : proj.Status === 'at-risk' ? 'badge-at-risk' : proj.Status === 'completed' ? 'badge-completed' : 'badge-on-track';
+    let progressColor = proj.Status === 'completed' ? 'var(--brand-500)' : proj.Status === 'delayed' ? 'var(--amber-500)' : proj.Status === 'at-risk' ? 'var(--rose-500)' : 'var(--emerald-500)';
+    const initials = proj.ProjectManager ? proj.ProjectManager.charAt(0).toUpperCase() : '?';
+    const projectKaizens = state.kaizens.filter(k => k.ProjectID === proj.ID);
+    const hasKaizen = projectKaizens.length > 0;
+    const kaizenClass = hasKaizen ? 'kaizen' : '';
+
+    return `<div class="glass-card project-card ${kaizenClass}" data-proj-id="${escHtml(proj.ID)}" style="border-radius:var(--r-2xl)">
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+          <div style="display:flex;gap:6px;align-items:center">
+            <span style="padding:2px 8px;background:var(--slate-800);border:1px solid var(--slate-700);font-size:10px;color:var(--text-muted);border-radius:6px;font-weight:600;text-transform:uppercase;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px">${escHtml(proj.Department)}</span>
+            ${hasKaizen ? `<span style="padding:2px 6px;background:rgba(212,175,55,0.15);border:1px solid rgba(212,175,55,0.3);font-size:10px;color:#ffd700;border-radius:6px;font-weight:700;display:flex;align-items:center;gap:2px">${svgIcon('award')} Kaizen (${projectKaizens.length})</span>` : ''}
+          </div>
+          <span class="badge ${statusClass}">${escHtml(statusText)}</span>
+        </div>
+        <h3 class="project-card-name" style="font-size:14px;font-weight:700;color:white;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:color 0.2s">${escHtml(proj.Name)}</h3>
+        <p style="color:var(--text-muted);font-size:12px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;line-height:1.5">${escHtml(proj.Description || 'No description provided.')}</p>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:12px;margin:12px 0">
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:4px">
+            <span style="color:var(--text-muted)">Project Progress</span>
+            <span style="font-weight:700;color:white">${proj.Progress || 0}%</span>
+          </div>
+          <div class="progress-track h-2"><div class="progress-fill" style="height:100%;border-radius:999px;background:${progressColor};width:${proj.Progress || 0}%;transition:width 0.5s ease"></div></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:var(--text-muted)">
+          <span style="display:flex;align-items:center;gap:4px">${svgIcon('calendar')} Timeline:</span>
+          <span style="font-weight:600;color:var(--text-secondary)">${formatDate(proj.PlannedStartDate)} – ${formatDate(proj.PlannedEndDate)}</span>
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;padding-top:12px;border-top:1px solid rgba(59,17,48,0.6);font-size:12px">
+        <div style="display:flex;align-items:center;gap:6px;color:var(--text-secondary)">
+          <div style="width:24px;height:24px;border-radius:50%;background:var(--slate-800);border:1px solid var(--slate-700);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--brand-400)">${escHtml(initials)}</div>
+          <span style="font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:90px">${escHtml(proj.ProjectManager || 'Unassigned')}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          ${proj.DaysDelayed > 0 && proj.Status !== 'completed' ? `<span style="display:flex;align-items:center;gap:2px;color:var(--rose-400);background:rgba(244,63,94,0.1);padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700;border:1px solid rgba(244,63,94,0.2)">${svgIcon('alert-triangle')} ${proj.DaysDelayed}d ongoing</span>` : ''}
+          ${proj.Benefits ? `<span style="display:flex;align-items:center;gap:2px;color:var(--emerald-400);background:rgba(16,185,129,0.1);padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600;border:1px solid rgba(16,185,129,0.2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70px">${svgIcon('trending-up')} ${escHtml(proj.Benefits)}</span>` : ''}
+        </div>
+      </div>
+    </div>`;
+  }).join('') : `<div class="col-span-3" style="text-align:center;padding:80px;background:rgba(28,6,23,0.3);border:1px dashed var(--slate-800);border-radius:var(--r-2xl)">
+    ${svgIcon('folder-kanban', 'w-12 h-12')}
+    <h3 style="color:white;font-size:15px;font-weight:700;margin-top:12px">No projects found</h3>
+    <p style="color:var(--text-dim);font-size:12px;margin-top:4px">Adjust search queries or filters to explore other items.</p>
+  </div>`;
+
+  container.innerHTML = `
+  <div class="space-y-6 animate-fade-in">
+    <div class="glass-panel rounded-2xl p-4" style="display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;align-items:center">
+      <div class="search-bar">
+        ${svgIcon('search')}
+        <input type="text" id="proj-search" placeholder="Search projects, PMs..." value="${escHtml(state.projectSearch)}">
+      </div>
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px">
+        <div class="filter-select-wrap">${svgIcon('filter')}
+          <select id="proj-dept-filter">
+            <option value="">All Departments</option>
+            ${departments.map(d => `<option value="${escHtml(d)}" ${state.projectDeptFilter === d ? 'selected' : ''} style="background:var(--slate-950);text-transform:capitalize">${escHtml(d)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="filter-select-wrap">${svgIcon('briefcase')}
+          <select id="proj-status-filter">
+            <option value="">All Statuses</option>
+            <option value="on-track" ${state.projectStatusFilter === 'on-track' ? 'selected' : ''}>On Track</option>
+            <option value="delayed" ${state.projectStatusFilter === 'delayed' ? 'selected' : ''}>On Going</option>
+            <option value="at-risk" ${state.projectStatusFilter === 'at-risk' ? 'selected' : ''}>At Risk</option>
+            <option value="completed" ${state.projectStatusFilter === 'completed' ? 'selected' : ''}>Completed</option>
+          </select>
+        </div>
+        <div class="filter-select-wrap">${svgIcon('arrow-up-down')}
+          <select id="proj-sort">
+            <option value="name" ${state.projectSortBy === 'name' ? 'selected' : ''}>Sort by Name</option>
+            <option value="date" ${state.projectSortBy === 'date' ? 'selected' : ''}>Sort by Date</option>
+            <option value="progress" ${state.projectSortBy === 'progress' ? 'selected' : ''}>Sort by Progress</option>
+            <option value="savings" ${state.projectSortBy === 'savings' ? 'selected' : ''}>Sort by Savings</option>
+          </select>
+        </div>
+        <button class="btn-primary" id="add-project-btn">${svgIcon('plus')} Add Project</button>
+      </div>
+    </div>
+    <div class="projects-grid">${cards}</div>
+  </div>`;
+}
+
+/* ============================================================
+   13. WORKSPACE
+   ============================================================ */
+function renderWorkspace(container) {
+  const project = state.projects.find(p => p.ID === state.activeProjectId);
+  if (!project) { renderEmpty(container); return; }
+
+  const projectTasks = state.tasks.filter(t => t.ProjectID === project.ID).sort((a, b) => compareTaskIds(a.ID, b.ID));
+  const projectSRFs = state.srfs.filter(s => s.ProjectID === project.ID);
+  const projectKaizens = state.kaizens.filter(k => k.ProjectID === project.ID);
+
+  const tabContent = (() => {
+    switch (state.workspaceTab) {
+      case 'overview': return renderOverviewTab(project, projectTasks, projectSRFs);
+      case 'gantt':    return renderGanttTab(project, projectTasks);
+      case 'tasks':    return renderTasksTab(project, projectTasks);
+      case 'srf':      return renderSRFTab(project, projectSRFs);
+      case 'kaizen':   return renderKaizenTab(project, projectKaizens);
+      default:         return '';
+    }
+  })();
+
+  container.innerHTML = `
+  <div class="space-y-6 animate-fade-in">
+
+    <!-- Workspace Header -->
+    <div class="glass-panel rounded-2xl p-5" style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:16px">
+      <div style="display:flex;align-items:center;gap:16px">
+        <button class="btn-icon" id="ws-back-btn" title="Back to projects">${svgIcon('arrow-left')}</button>
+        <div>
+          <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-muted);text-transform:capitalize">
+            <span style="font-weight:600;color:var(--text-secondary);background:var(--slate-850);padding:2px 8px;border-radius:6px;border:1px solid var(--slate-800)">${escHtml(project.Department)}</span>
+            <span>•</span>
+            <span style="display:flex;align-items:center;gap:4px">${svgIcon('user')} PM: ${escHtml(project.ProjectManager || 'Unassigned')}</span>
+          </div>
+          <h2 style="font-size:20px;font-weight:700;color:white;margin-top:6px">${escHtml(project.Name)}</h2>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <button class="btn-ghost" id="ws-edit-btn">${svgIcon('edit-3')} Edit Project</button>
+        <button class="btn-danger" id="ws-delete-btn">${svgIcon('trash-2')} Delete</button>
+      </div>
+    </div>
+
+    ${project.Description ? `
+    <div class="glass-card desc-panel">
+      <h4 style="font-size:10px;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px;display:flex;align-items:center;gap:4px">${svgIcon('info', 'w-3.5 h-3.5')} Project Scope / Description</h4>
+      ${escHtml(project.Description)}
+    </div>` : ''}
+
+    <!-- Tabs -->
+    <div class="tab-bar">
+      ${[
+        { id: 'overview', label: 'Overview', icon: 'bar-chart-3' },
+        { id: 'gantt', label: 'Gantt Chart', icon: 'calendar-days' },
+        { id: 'tasks', label: 'Task Checklist', icon: 'list-todo', badge: projectTasks.length },
+        { id: 'srf', label: 'SRF Procurement', icon: 'file-spreadsheet', badge: projectSRFs.length > 0 ? projectSRFs.length : null, badgeClass: 'srf' },
+        { id: 'kaizen', label: 'Kaizen Log', icon: 'award', badge: projectKaizens.length > 0 ? projectKaizens.length : null },
+      ].map(tab => `<button class="tab-btn ${state.workspaceTab === tab.id ? 'active' : ''}" data-tab="${tab.id}">
+        ${svgIcon(tab.icon)} ${escHtml(tab.label)}
+        ${tab.badge !== undefined && tab.badge !== null ? `<span class="tab-badge ${tab.badgeClass || ''}">${tab.badge}</span>` : ''}
+      </button>`).join('')}
+    </div>
+
+    <!-- Tab Content -->
+    ${tabContent}
+
+  </div>`;
+}
+
+function renderOverviewTab(project, projectTasks, projectSRFs) {
+  const taskIds = projectTasks.map(t => t.ID);
+  const leafTasks = projectTasks.filter(t => !taskIds.some(otherId => otherId.startsWith(t.ID + '.')));
+  const inHouseCost = leafTasks.filter(t => !String(t.Assignee).toLowerCase().includes('gitl')).reduce((s, t) => s + (t.Progress * 1500), 0);
+  const gitlCost = projectSRFs.reduce((s, sr) => s + (sr.Cost || 0), 0);
+  const totalAlloc = inHouseCost + gitlCost || 1;
+  const inHousePct = Math.round((inHouseCost / totalAlloc) * 100);
+  const gitlPct = Math.round((gitlCost / totalAlloc) * 100);
+  const progressColor = project.Status === 'completed' ? 'var(--brand-500)' : project.Status === 'delayed' ? 'var(--amber-500)' : 'var(--emerald-500)';
+
+  return `<div class="grid grid-3 animate-slide-up">
+    <!-- Progress Gauge -->
+    <div class="glass-panel rounded-2xl p-5 flex flex-col items-center justify-between min-h-300 text-center">
+      <div style="width:100%;text-align:left"><h3 style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em">Completion Progress</h3></div>
+      <div class="donut-container" style="width:160px;height:160px;margin:12px 0">
+        <svg class="w-full h-full" viewBox="0 0 36 36" style="transform:rotate(-90deg)">
+          <circle cx="18" cy="18" r="16" fill="none" stroke="var(--slate-800)" stroke-width="2.5"/>
+          <circle cx="18" cy="18" r="16" fill="none" stroke="${progressColor}" stroke-width="3" stroke-dasharray="${project.Progress || 0} 100" stroke-linecap="round"/>
+        </svg>
+        <div class="donut-center">
+          <span class="count">${project.Progress || 0}%</span>
+          <span style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600;margin-top:2px">${escHtml(project.Status)}</span>
+        </div>
+      </div>
+      <div style="width:100%;background:rgba(59,17,48,0.4);border:1px solid rgba(59,17,48,0.8);border-radius:var(--r-xl);padding:12px;display:flex;justify-content:space-between;font-size:12px">
+        <div><span style="color:var(--text-dim)">Tasks Total:</span> <span style="color:white;font-weight:700">${projectTasks.length}</span></div>
+        <div><span style="color:var(--text-dim)">Completed:</span> <span style="color:var(--emerald-400);font-weight:700">${projectTasks.filter(t => t.Status === 'completed').length}</span></div>
+      </div>
+    </div>
+
+    <!-- Financial Overview (Redesigned: Benefits Highlighted, Spendings Subtle) -->
+    <div class="glass-panel rounded-2xl p-5 flex flex-col justify-between col-span-2 min-h-300">
+      <div>
+        <h3 style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:16px">Project Cost Study &amp; Benefits</h3>
+        
+        <!-- Highly Highlighted Benefits Banner -->
+        <div style="background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.18);border-radius:var(--r-xl);padding:16px;display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+          <div>
+            <div style="font-size:9px;color:var(--emerald-400);text-transform:uppercase;letter-spacing:0.08em;font-weight:700">Project Benefit Output</div>
+            <div style="font-size:24px;font-weight:800;color:white;margin-top:4px;display:flex;align-items:center;gap:8px">
+              <span style="color:var(--emerald-400);display:flex;align-items:center">${svgIcon('trending-up', 'w-7 h-7')}</span>
+              ${escHtml(project.Benefits || 'N/A')}
+            </div>
+          </div>
+          <div style="text-align:right">
+            <span style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.06em">Project Status</span>
+            <span class="badge" style="margin-top:4px;display:inline-block;background:var(--slate-800);border:1px solid var(--slate-750);color:white;font-size:10px">${escHtml(project.Status)}</span>
+          </div>
+        </div>
+
+        <!-- Subtle Spendings Panels -->
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;background:rgba(30,30,30,0.25);border:1px solid var(--slate-850);padding:12px;border-radius:var(--r-xl)">
+          <div class="cost-panel-item">
+            <div style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.06em;font-weight:600">Total Spendings</div>
+            <div style="font-size:13px;font-weight:700;color:white;margin-top:2px">${escHtml(formatCurrency(project.Spent || 0))}</div>
+          </div>
+          <div class="cost-panel-item" style="border-left:1px solid var(--slate-800);padding-left:16px">
+            <div style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.06em;font-weight:600">In-house Cost</div>
+            <div style="font-size:13px;font-weight:700;color:var(--text-secondary);margin-top:2px">${escHtml(formatCurrency(inHouseCost))}</div>
+            <div style="font-size:8px;color:var(--text-muted);margin-top:1px">Task leaf logs</div>
+          </div>
+          <div class="cost-panel-item" style="border-left:1px solid var(--slate-800);padding-left:16px">
+            <div style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.06em;font-weight:600">GITL / SRF Cost</div>
+            <div style="font-size:13px;font-weight:700;color:var(--rose-400);margin-top:2px">${escHtml(formatCurrency(gitlCost))}</div>
+            <div style="font-size:8px;color:var(--text-muted);margin-top:1px">Linked SRFs</div>
+          </div>
+        </div>
+
+        <!-- Allocation Breakdown Bar -->
+        <div style="margin-top:18px">
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted);margin-bottom:6px">
+            <span>Project Resource Allocation Breakdown</span>
+            <span>Total Allocated: ${escHtml(formatCurrency(inHouseCost + gitlCost))}</span>
+          </div>
+          <div class="allocation-bar">
+            ${inHouseCost > 0 ? `<div class="allocation-segment" style="width:${inHousePct}%;background:var(--brand-500)" title="In-House: ${formatCurrency(inHouseCost)}">In-House</div>` : ''}
+            ${gitlCost > 0 ? `<div class="allocation-segment" style="width:${gitlPct}%;background:var(--rose-500)" title="GITL: ${formatCurrency(gitlCost)}">GITL</div>` : ''}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Timelines -->
+    <div class="glass-panel rounded-2xl p-5 col-span-3 space-y-4">
+      <h3 style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em">Project Timeline Study</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">
+        <div class="timeline-block">
+          <div style="display:flex;align-items:center;gap:8px;font-weight:600;color:white;margin-bottom:16px">
+            <div style="width:10px;height:10px;border-radius:50%;background:var(--blue-500)"></div> Planned Schedule
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;font-size:13px">
+            <div><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600">Planned Start</div><div style="color:var(--text-secondary);margin-top:2px">${formatDate(project.PlannedStartDate)}</div></div>
+            <div><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600">Planned End</div><div style="color:var(--text-secondary);margin-top:2px">${formatDate(project.PlannedEndDate)}</div></div>
+          </div>
+        </div>
+        <div class="timeline-block">
+          <div style="display:flex;align-items:center;gap:8px;font-weight:600;color:white;margin-bottom:16px">
+            <div style="width:10px;height:10px;border-radius:50%;background:var(--emerald-500)"></div> Actual Schedule
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;font-size:13px">
+            <div><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600">Actual Start</div><div style="color:var(--text-secondary);margin-top:2px">${formatDate(project.ActualStartDate)}</div></div>
+            <div><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600">Actual End</div><div style="color:var(--text-secondary);margin-top:2px">${formatDate(project.ActualEndDate)}</div></div>
+          </div>
+        </div>
+      </div>
+      ${project.DaysDelayed > 0 && project.Status !== 'completed' ? `
+      <div class="info-box">
+        ${svgIcon('alert-triangle')}
+        <div><strong>Timeline Deviation Alert:</strong> This project is running <strong>${project.DaysDelayed} days</strong> behind schedule. Check critical bottlenecks in Gantt chart or Task Checklist.</div>
+      </div>` : ''}
+    </div>
+  </div>`;
+}
+
+function renderGanttTab(project, projectTasks) {
+  if (projectTasks.length === 0) {
+    return `<div class="glass-panel rounded-2xl p-5 animate-slide-up" style="text-align:center;padding:64px;color:var(--text-dim);font-size:13px">
+      No tasks available to chart. Click 'Task Checklist' tab to add tasks.
+    </div>`;
+  }
+
+  const allDates = projectTasks.flatMap(t => [t.PlannedStartDate, t.PlannedEndDate]).filter(Boolean).map(d => new Date(d));
+  let minDate = allDates.length > 0 ? new Date(Math.min(...allDates)) : new Date();
+  let maxDate = allDates.length > 0 ? new Date(Math.max(...allDates)) : new Date();
+  minDate.setDate(minDate.getDate() - 5);
+  maxDate.setDate(maxDate.getDate() + 5);
+  const totalDays = Math.max(1, Math.round((maxDate - minDate) / 86400000));
+
+  const scaleLabels = Array.from({ length: 6 }, (_, i) => {
+    if (state.ganttScale === 'day') return `Day ${Math.round((i / 5) * totalDays)}`;
+    if (state.ganttScale === 'week') return `Wk ${i * 2 + 1}`;
+    return `M${i + 1}`;
+  });
+
+  const taskLabels = projectTasks.map(t => {
+    const level = String(t.ID).split('.').length - 1;
+    return `<div class="gantt-task-label" style="padding-left:${16 + level * 12}px">
+      <span style="font-size:10px;color:var(--text-dim);margin-right:6px">${escHtml(t.ID)}</span>
+      <span style="color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(t.Name)}</span>
+    </div>`;
+  }).join('');
+
+  const timeHeader = scaleLabels.map((label, i) =>
+    `<div class="gantt-time-col" style="left:${(i/6)*100}%;width:${100/6}%">${label}</div>`
+  ).join('');
+
+  const taskBars = projectTasks.map(t => {
+    const start = t.PlannedStartDate ? new Date(t.PlannedStartDate) : minDate;
+    const end   = t.PlannedEndDate   ? new Date(t.PlannedEndDate)   : maxDate;
+    const daysFromMin = Math.max(0, Math.round((start - minDate) / 86400000));
+    const durDays = Math.max(1, Math.round((end - start) / 86400000));
+    const leftPct = Math.min(95, Math.max(1, (daysFromMin / totalDays) * 100));
+    const widPct  = Math.min(100 - leftPct, Math.max(4, (durDays / totalDays) * 100));
+    const level   = String(t.ID).split('.').length - 1;
+
+    let barBorder = 'var(--brand-500)', barBg = 'rgba(129,0,85,0.25)', fillBg = 'var(--brand-500)';
+    if (level === 0) { barBorder = '#6366f1'; barBg = 'rgba(99,102,241,0.2)'; fillBg = '#6366f1'; }
+    if (t.Status === 'delayed') { barBorder = 'var(--amber-500)'; barBg = 'rgba(245,158,11,0.2)'; fillBg = 'var(--amber-500)'; }
+    if (t.Status === 'blocked') { barBorder = 'var(--rose-500)'; barBg = 'rgba(244,63,94,0.2)'; fillBg = 'var(--rose-500)'; }
+    if (t.Status === 'completed') { barBorder = 'var(--emerald-500)'; barBg = 'rgba(16,185,129,0.2)'; fillBg = 'var(--emerald-500)'; }
+
+    return `<div class="gantt-bar-row">
+      <div class="gantt-bar" style="left:${leftPct}%;width:${widPct}%;background:${barBg};border-color:${barBorder}" title="${escHtml(t.Name)}: ${t.Progress}% (${formatDate(t.PlannedStartDate)} – ${formatDate(t.PlannedEndDate)})">
+        <div class="gantt-bar-fill" style="width:${t.Progress || 0}%;background:${fillBg}"></div>
+      </div>
+      <span class="gantt-bar-label" style="left:${leftPct + widPct + 1.5}%">${t.Progress}% • ${escHtml(t.Assignee)}</span>
+    </div>`;
+  }).join('');
+
+  return `<div class="glass-panel rounded-2xl p-5 space-y-4 animate-slide-up" style="overflow:hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <h3 class="panel-title">${svgIcon('calendar')} Timeline Chart</h3>
+      <div class="btn-group">
+        ${['day','week','month'].map(s => `<button class="btn-group-item ${state.ganttScale === s ? 'active' : ''}" data-gantt-scale="${s}">${s.charAt(0).toUpperCase() + s.slice(1)}s</button>`).join('')}
+      </div>
+    </div>
+    <div class="gantt-wrap">
+      <div class="gantt-container">
+        <div class="gantt-labels">
+          <div class="gantt-header-cell">Activity Name</div>
+          ${taskLabels}
+        </div>
+        <div class="gantt-chart-area">
+          <div class="gantt-time-header" style="position:relative">${timeHeader}</div>
+          <div>${taskBars}</div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderTasksTab(project, projectTasks) {
+  const assignees = [...new Set(projectTasks.map(t => t.Assignee).filter(Boolean))];
+  const filtered = projectTasks.filter(t => state.taskAssigneeFilter ? t.Assignee === state.taskAssigneeFilter : true);
+
+  const rows = filtered.length > 0 ? filtered.map(t => {
+    const level = String(t.ID).split('.').length - 1;
+    let sClass = 'badge';
+    let statusCol = 'var(--slate-500)';
+    let borderCol = 'var(--slate-600)';
+    if (t.Status === 'in-progress') { sClass = 'badge badge-blue'; statusCol = 'var(--blue-500)'; borderCol = 'var(--blue-500)'; }
+    else if (t.Status === 'completed') { sClass = 'badge badge-emerald'; statusCol = 'var(--emerald-500)'; borderCol = 'var(--emerald-500)'; }
+    else if (t.Status === 'delayed') { sClass = 'badge badge-delayed'; statusCol = 'var(--amber-500)'; borderCol = 'var(--amber-500)'; }
+    else if (t.Status === 'blocked') { sClass = 'badge badge-rose'; statusCol = 'var(--rose-500)'; borderCol = 'var(--rose-500)'; }
+
+    const horizontalConnector = level > 0 ? `<div class="checklist-connector-line" style="width: 16px; left: -16px;"></div>` : '';
+    const isCompleted = t.Status === 'completed';
+
+    return `<div class="checklist-card" data-task-id="${escHtml(t.ID)}" style="margin-left: ${level * 24}px; border-left-color: ${borderCol}">
+      ${horizontalConnector}
+      <div class="checklist-card-main">
+        <div style="display:flex;align-items:center;gap:12px;margin-right:12px">
+          <!-- Started Checkbox -->
+          <label class="checklist-check-wrapper" style="display:flex;flex-direction:column;align-items:center;gap:4px" title="Mark Started">
+            <input type="checkbox" ${t.ActualStartDate ? 'checked' : ''} class="task-start-check" data-task-id="${escHtml(t.ID)}">
+            <span class="checklist-checkbox-custom">${svgIcon('play', 'w-3 h-3')}</span>
+            <span style="font-size:8px;color:var(--text-dim);font-weight:600;text-transform:uppercase;letter-spacing:0.04em">Started</span>
+          </label>
+          <!-- Completed Checkbox -->
+          <label class="checklist-check-wrapper" style="display:flex;flex-direction:column;align-items:center;gap:4px" title="Mark Completed">
+            <input type="checkbox" ${t.ActualEndDate ? 'checked' : ''} class="task-complete-check" data-task-id="${escHtml(t.ID)}">
+            <span class="checklist-checkbox-custom">${svgIcon('check', 'w-3 h-3')}</span>
+            <span style="font-size:8px;color:var(--text-dim);font-weight:600;text-transform:uppercase;letter-spacing:0.04em">Done</span>
+          </label>
+        </div>
+        <div class="checklist-info">
+          <div class="checklist-header-info">
+            <span class="checklist-id">${escHtml(t.ID)}</span>
+            <span class="checklist-name">${escHtml(t.Name)}</span>
+          </div>
+          <div class="checklist-meta">
+            <span class="checklist-meta-item">${svgIcon('user')} ${escHtml(t.Assignee || 'Unassigned')}</span>
+            <span class="checklist-meta-item">${svgIcon('calendar')} ${formatDate(t.PlannedStartDate)} – ${formatDate(t.PlannedEndDate)}</span>
+            ${t.DaysDelayed > 0 ? `<span class="checklist-meta-item" style="color:var(--rose-400)">${svgIcon('alert-triangle')} ${t.DaysDelayed}d ongoing</span>` : ''}
+          </div>
+        </div>
+      </div>
+      <div class="checklist-card-actions">
+        <div class="checklist-progress-wrapper">
+          <span class="checklist-progress-text">${t.Progress || 0}%</span>
+          <div class="checklist-progress-bar-track">
+            <div class="checklist-progress-bar-fill" style="width: ${t.Progress || 0}%; background-color: ${statusCol}"></div>
+          </div>
+        </div>
+        <span class="badge ${sClass}" style="text-transform:capitalize">${escHtml(getStatusText(t.Status))}</span>
+        <div class="checklist-buttons">
+          <button class="task-edit-btn" data-task-id="${escHtml(t.ID)}" title="Edit">${svgIcon('edit-3')}</button>
+          <button class="task-delete-btn" data-task-id="${escHtml(t.ID)}" title="Delete">${svgIcon('trash-2')}</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('') : `<div style="text-align:center;padding:40px;color:var(--text-dim);font-size:12px;background:rgba(28,6,23,0.3);border:1px dashed var(--slate-850);border-radius:var(--r-xl)">No tasks logged. Add activity items using '+ Add Task' button.</div>`;
+
+  return `<div class="glass-panel rounded-2xl p-5 space-y-4 animate-slide-up">
+    <div style="display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;align-items:center">
+      <div style="display:flex;align-items:center;gap:12px">
+        <span style="font-size:11px;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.08em">Checklist:</span>
+        <div class="filter-select-wrap">${svgIcon('user')}
+          <select id="task-assignee-filter">
+            <option value="">Filter by Assignee</option>
+            ${assignees.map(a => `<option value="${escHtml(a)}" ${state.taskAssigneeFilter === a ? 'selected' : ''}>${escHtml(a)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <button class="btn-primary" id="add-task-btn">${svgIcon('plus')} Add Task / Activity</button>
+    </div>
+    <div class="checklist-tree-container">
+      ${rows}
+    </div>
+  </div>`;
+}
+
+const SRF_STEPS = [
+  { key: 'UploadedOn', label: 'Uploaded On' },
+  { key: 'ApprovedOn', label: 'Approved On' },
+  { key: 'ReceivedCCB', label: 'Received for CCB' },
+  { key: 'SendCCB', label: 'Send for CCB' },
+  { key: 'CCBReceived', label: 'CCB Received On' },
+  { key: 'CCBAttached', label: 'CCB Attached in CRS On' },
+  { key: 'FSDReceived', label: 'FSD Received On' },
+  { key: 'FSDApproved', label: 'FSD Approved On' },
+  { key: 'ReceivedUAT', label: 'Received for UAT' },
+  { key: 'ActualTestingApproval', label: 'Actual Testing & Approval' },
+  { key: 'SRFClose', label: 'SRF Close' }
+];
+
+function validateSRFChronology(srfItem) {
+  const warnings = [];
+  let lastDate = null, lastName = null;
+  SRF_STEPS.forEach(step => {
+    const dateStr = srfItem[step.key];
+    if (dateStr) {
+      const d = new Date(dateStr);
+      if (lastDate && d < lastDate) {
+        warnings.push(`"${step.label}" (${dateStr}) is earlier than preceding step "${lastName}" (${srfItem[SRF_STEPS.find(s => s.label === lastName).key]}).`);
+      }
+      lastDate = d; lastName = step.label;
+    }
+  });
+  return warnings;
+}
+
+function renderSRFTab(project, projectSRFs) {
+  if (projectSRFs.length === 0) {
+    return `<div class="glass-panel rounded-2xl p-5 animate-slide-up">
+      <div style="text-align:center;padding:80px;background:rgba(28,6,23,0.3);border:1px dashed var(--slate-800);border-radius:var(--r-2xl)">
+        ${svgIcon('file-spreadsheet', 'w-12 h-12')}
+        <h3 style="color:white;font-size:15px;font-weight:700;margin-top:12px">No SRF documents linked</h3>
+        <p style="color:var(--text-dim);font-size:12px;margin-top:4px">No linked GITL SRF documents. Click 'Add SRF Document' to initiate tracking.</p>
+        <button class="btn-danger" id="add-srf-btn" style="margin-top:20px">${svgIcon('plus')} Add SRF Document</button>
+      </div>
+    </div>`;
+  }
+
+  const idx = Math.min(state.selectedSRFIndex, projectSRFs.length - 1);
+  const srfItem = projectSRFs[idx];
+  const warnings = validateSRFChronology(srfItem);
+
+  const srfPills = projectSRFs.map((s, i) =>
+    `<button class="srf-tab ${i === idx ? 'active' : ''}" data-srf-index="${i}">${escHtml(s.SRFNo)}</button>`
+  ).join('');
+
+  const completedIndex = SRF_STEPS.map(step => !!srfItem[step.key]).lastIndexOf(true);
+  const progressPct = completedIndex >= 0 ? (completedIndex / (SRF_STEPS.length - 1)) * 100 : 0;
+
+  const stepNodes = SRF_STEPS.map((step, si) => {
+    const dateVal = srfItem[step.key];
+    const isDone = !!dateVal;
+    const isCurrent = (si === completedIndex + 1) || (completedIndex === -1 && si === 0);
+    return `<div class="srf-pipeline-step ${isDone ? 'done' : ''} ${isCurrent ? 'current' : ''}">
+      <label class="srf-pipeline-node">
+        <input type="checkbox" ${isDone ? 'checked' : ''} class="srf-step-check srf-pipeline-checkbox" data-step-index="${si}" data-srf-no="${escHtml(srfItem.SRFNo)}">
+        <span class="srf-node-inner">${isDone ? svgIcon('check', 'w-4 h-4') : (si + 1)}</span>
+      </label>
+      <div class="srf-pipeline-content">
+        <div class="srf-pipeline-label">${escHtml(step.label)}</div>
+        ${isDone ? `<div class="srf-pipeline-date">${formatDate(dateVal)}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  return `<div class="glass-panel rounded-2xl p-5 space-y-6 animate-slide-up">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;padding-bottom:16px;border-bottom:1px solid rgba(59,17,48,0.8)">
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px">
+        <span style="font-size:11px;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.08em;margin-right:8px">Select SRF Item:</span>
+        ${srfPills}
+      </div>
+      <button class="btn-danger" id="add-srf-btn">${svgIcon('plus')} Add SRF Document</button>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;background:rgba(28,6,23,0.4);border:1px solid rgba(59,17,48,0.6);border-radius:var(--r-2xl);padding:20px;font-size:13px">
+      <div><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600">Development Descriptor</div><div style="font-weight:600;color:white;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${escHtml(srfItem.Developments || 'N/A')}</div></div>
+      <div><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600">Requester User</div><div style="font-weight:600;color:var(--text-secondary)">${escHtml(srfItem.User || 'N/A')}</div></div>
+      <div><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600">Est. Mandays (FC/TC)</div><div style="font-weight:600;color:var(--text-secondary)">${srfItem.MandaysFC} FC + ${srfItem.MandaysTC} TC = <strong style="color:white">${srfItem.TotalMandays} Total</strong></div></div>
+      <div><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600">Development Cost (INR)</div><div style="font-weight:700;color:var(--emerald-400)">${escHtml(formatCurrency(srfItem.Cost))}</div></div>
+      <div style="grid-column:1/-1;padding-top:12px;border-top:1px solid var(--slate-850);display:flex;justify-content:space-between;align-items:center;font-size:12px">
+        <div style="color:var(--text-muted)">Current Phase: <span style="padding:2px 8px;background:rgba(244,63,94,0.1);border:1px solid rgba(244,63,94,0.2);color:var(--rose-400);font-weight:700;border-radius:4px;text-transform:uppercase;font-size:10px;margin-left:6px">${escHtml(srfItem.Status)}</span></div>
+        <div style="display:flex;gap:8px">
+          <button class="btn-ghost" id="edit-srf-btn" style="font-size:11px;padding:4px 8px">${svgIcon('edit-3')} Edit SRF</button>
+          <button class="btn-danger" id="delete-srf-btn" style="font-size:11px;padding:4px 8px">${svgIcon('trash-2')} Delete</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="space-y-3" style="overflow-x:auto">
+      <h4 style="font-size:12px;font-weight:700;color:white;display:flex;align-items:center;gap:8px;margin-bottom:12px">${svgIcon('clock', 'w-4 h-4')} Procurement Pipeline Steps (Sequential Stepper)</h4>
+      <div class="srf-pipeline-container">
+        <div class="srf-pipeline-line"></div>
+        <div class="srf-pipeline-progress-line" style="width: ${progressPct}%"></div>
+        ${stepNodes}
+      </div>
+    </div>
+
+    ${warnings.length > 0 ? `<div style="background:rgba(244,63,94,0.1);border:1px solid rgba(244,63,94,0.2);border-radius:var(--r-xl);padding:16px;display:flex;flex-direction:column;gap:8px">
+      <h4 style="font-size:12px;font-weight:700;color:var(--rose-400);display:flex;align-items:center;gap:8px">${svgIcon('alert-triangle')} Chronological Sequencing Warnings</h4>
+      <ul style="list-style:disc;list-style-position:inside;font-size:12px;color:var(--text-secondary);display:flex;flex-direction:column;gap:4px">${warnings.map(w => `<li>${escHtml(w)}</li>`).join('')}</ul>
+    </div>` : ''}
+  </div>`;
+}
+
+function renderKaizenTab(project, projectKaizens) {
+  if (projectKaizens.length === 0) {
+    return `<div class="glass-panel rounded-2xl p-5 animate-slide-up">
+      <div style="text-align:center;padding:80px;background:rgba(28,6,23,0.3);border:1px dashed var(--slate-800);border-radius:var(--r-2xl)">
+        ${svgIcon('award', 'w-12 h-12')}
+        <h3 style="color:white;font-size:15px;font-weight:700;margin-top:12px">No Kaizen records linked</h3>
+        <p style="color:var(--text-dim);font-size:12px;margin-top:4px">No Kaizen initiatives have been logged for this project yet.</p>
+        <button class="btn-danger" id="add-kaizen-btn" style="margin-top:20px">${svgIcon('plus')} Add Kaizen</button>
+      </div>
+    </div>`;
+  }
+
+  const cardsHtml = projectKaizens.map(k => {
+    const steps = [
+      { label: 'Uploaded', key: 'UploadedOn' },
+      { label: 'Approved L+1', key: 'ApprovedL1' },
+      { label: 'Approved L+2', key: 'ApprovedL2' }
+    ];
+
+    const completedCount = steps.filter(s => !!k[s.key]).length;
+    const progressPct = completedCount > 0 ? ((completedCount - 1) / (steps.length - 1)) * 100 : 0;
+
+    const pipelineSteps = steps.map((s, si) => {
+      const isDone = !!k[s.key];
+      const isCurrent = (!isDone && (si === 0 || !!k[steps[si-1].key])) || (isDone && si === completedCount - 1);
+      return `<div class="kaizen-pipeline-step ${isDone ? 'done' : ''} ${isCurrent ? 'current' : ''}">
+        <label class="kaizen-pipeline-node">
+          <input type="checkbox" ${isDone ? 'checked' : ''} class="kaizen-step-check kaizen-pipeline-checkbox" data-kaizen-id="${escHtml(k.ID)}" data-step-key="${s.key}">
+          <span class="kaizen-node-inner">${svgIcon('check')}</span>
+        </label>
+        <div class="kaizen-pipeline-label-wrap">
+          <span class="kaizen-pipeline-label">${escHtml(s.label)}</span>
+          ${isDone ? `<span class="kaizen-pipeline-date">${formatDate(k[s.key])}</span>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+
+    return `<div class="kaizen-card">
+      <div class="kaizen-card-header">
+        <div class="kaizen-card-title">${escHtml(k.Title)}</div>
+        <div class="kaizen-card-badge-group">
+          <span class="kaizen-grade-badge">Grade ${escHtml(k.Grade)}</span>
+          <span style="font-size:10px;color:var(--text-muted)">ID: ${escHtml(k.ID)}</span>
+        </div>
+      </div>
+      <div class="kaizen-pipeline-wrapper">
+        <div class="kaizen-pipeline-container">
+          <div class="kaizen-pipeline-line"></div>
+          <div class="kaizen-pipeline-progress-line" style="width: ${progressPct}%"></div>
+          ${pipelineSteps}
+        </div>
+      </div>
+      <div class="kaizen-card-actions">
+        <button class="btn-ghost kaizen-edit-btn" data-kaizen-id="${escHtml(k.ID)}" style="font-size:11px;padding:4px 8px">${svgIcon('edit-3')} Edit</button>
+        <button class="btn-danger kaizen-delete-btn" data-kaizen-id="${escHtml(k.ID)}" style="font-size:11px;padding:4px 8px">${svgIcon('trash-2')} Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  return `<div class="glass-panel rounded-2xl p-5 space-y-6 animate-slide-up">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:16px;border-bottom:1px solid rgba(59,17,48,0.8)">
+      <h3 style="font-size:14px;font-weight:700;color:white;display:flex;align-items:center;gap:8px">${svgIcon('award')} Kaizen Improvement Initiatives</h3>
+      <button class="btn-primary" id="add-kaizen-btn">${svgIcon('plus')} Add Kaizen</button>
+    </div>
+    <div class="kaizen-log-container">
+      ${cardsHtml}
+    </div>
+  </div>`;
+}
+
+/* ============================================================
+   14. TEAM PAGE
+   ============================================================ */
+function renderTeam(container) {
+  const teamList = state.teamMembers.map(member => {
+    const managedProjs = state.projects.filter(p => p.ProjectManager === member.name);
+    const taskProjs = state.projects.filter(p => state.tasks.some(t => t.ProjectID === p.ID && t.Assignee === member.name));
+    const allIds = new Set([...managedProjs.map(p => p.ID), ...taskProjs.map(p => p.ID)]);
+    const assignedProjects = state.projects.filter(p => allIds.has(p.ID));
+    const memberTasks = state.tasks.filter(t => t.Assignee === member.name);
+    const completedTasks = memberTasks.filter(t => t.Status === 'completed').length;
+    const activeTasks = memberTasks.filter(t => t.Status === 'in-progress').length;
+    return { ...member, projects: assignedProjects, projectCount: assignedProjects.length, totalTasks: memberTasks.length, completedTasks, activeTasks };
+  }).sort((a, b) => b.projectCount - a.projectCount);
+
+  const chartHeight = 160;
+  const maxProjCount = Math.max(1, ...teamList.map(t => t.projectCount));
+
+  const gridLines = [0, 0.25, 0.5, 0.75, 1].map(ratio => {
+    const val = Math.round(maxProjCount * ratio);
+    const bottomPos = ratio * chartHeight + 32;
+    return `<div style="position:absolute;width:100%;border-top:1px solid rgba(59,17,48,0.4);bottom:${bottomPos}px;display:flex;justify-content:flex-end;padding-right:16px;font-size:9px;color:var(--text-dim);font-weight:700">
+      <span>${val} ${val === 1 ? 'Project' : 'Projects'}</span>
+    </div>`;
+  }).join('');
+
+  const gradients = ['linear-gradient(to top, var(--brand-500), var(--brand-300))', 'linear-gradient(to top, var(--emerald-500), #2dd4bf)', 'linear-gradient(to top, #a855f7, #ec4899)'];
+  const bars = teamList.slice(0, 10).map((m, i) => {
+    const barH = Math.max(8, (m.projectCount / maxProjCount) * chartHeight);
+    const grad = gradients[i % 3];
+    return `<div class="team-bar-item" style="width:${100 / Math.min(10, teamList.length)}%">
+      <div class="team-tooltip">${m.projectCount} Projects | ${m.totalTasks} Tasks</div>
+      <div class="team-bar" style="height:${barH}px;background:${grad}"></div>
+      <span class="team-bar-label">${escHtml(m.name)}</span>
+    </div>`;
+  }).join('');
+
+  const tableRows = teamList.map(m => `<tr>
+    <td style="padding:14px 16px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="member-avatar">${escHtml(m.name.charAt(0).toUpperCase())}</div>
+        <span style="font-weight:600;color:white">${escHtml(m.name)}</span>
+      </div>
+    </td>
+    <td style="padding:14px 16px;color:var(--text-secondary);font-weight:500">${escHtml(m.role)}</td>
+    <td style="padding:14px 16px;color:var(--text-muted);text-transform:capitalize;font-weight:500">${escHtml(m.department)}</td>
+    <td style="padding:14px 16px">
+      <div style="display:flex;flex-wrap:wrap;gap:4px;max-width:300px">
+        ${m.projects.length > 0 ? m.projects.map(proj => `<span style="padding:2px 8px;background:var(--slate-800);color:var(--text-secondary);border-radius:4px;border:1px solid var(--slate-700);font-size:10px;font-weight:600">${escHtml(proj.Name)}</span>`).join('') : `<span style="color:var(--text-dim);font-style:italic;font-size:10px">No active project assignments</span>`}
+      </div>
+    </td>
+    <td style="padding:14px 16px;text-align:center;font-weight:700;color:var(--text-secondary)">
+      ${m.totalTasks > 0 ? `<span style="padding:2px 10px;background:rgba(129,0,85,0.1);border:1px solid rgba(129,0,85,0.2);color:var(--brand-300);border-radius:999px;font-weight:700">${m.totalTasks}</span>` : `<span style="color:var(--text-dim)">-</span>`}
+    </td>
+    <td style="padding:14px 16px;text-align:center">
+      ${m.totalTasks > 0 ? `<div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+        <span style="color:var(--emerald-400);font-weight:600;font-size:12px">${m.completedTasks} / ${m.totalTasks}</span>
+        <div class="progress-track h-1" style="width:48px"><div class="progress-fill fill-emerald" style="height:100%;border-radius:999px;background:var(--emerald-500);width:${Math.round((m.completedTasks / m.totalTasks) * 100)}%"></div></div>
+      </div>` : `<span style="color:var(--text-dim)">-</span>`}
+    </td>
+  </tr>`).join('');
+
+  container.innerHTML = `
+  <div class="space-y-6 animate-fade-in">
+    <div class="glass-panel rounded-2xl p-5 space-y-4">
+      <h3 class="panel-title">${svgIcon('award')} Project Allocation Workload Chart</h3>
+      <div class="team-chart-container">
+        <div class="team-chart-bars" style="min-width:600px">
+          ${gridLines}
+          ${bars}
+        </div>
+      </div>
+    </div>
+    <div class="glass-panel rounded-2xl p-5 space-y-4">
+      <h3 class="panel-title">${svgIcon('users')} Resource Directory &amp; Portfolio Index</h3>
+      <div style="overflow-x:auto;border:1px solid rgba(43,11,35,0.8);border-radius:var(--r-xl)">
+        <table class="team-table">
+          <thead><tr>
+            <th>Member Name</th><th>Role Descriptor</th><th>Department</th><th>Assigned Projects</th><th style="text-align:center">Tasks Load</th><th style="text-align:center">Completed</th>
+          </tr></thead>
+          <tbody>${tableRows}</tbody>
+        </table>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ============================================================
+   15. EMPTY STATE
+   ============================================================ */
+function renderEmpty(container) {
+  container.innerHTML = `
+  <div class="empty-state">
+    <div class="empty-icon">${svgIcon('file-spreadsheet')}</div>
+    <div style="text-align:center;display:flex;flex-direction:column;gap:8px">
+      <h3 style="color:white;font-size:16px;font-weight:700">No Project Database Loaded</h3>
+      <p style="color:var(--text-muted);font-size:12px;line-height:1.6">This management tracker relies on local spreadsheet data. Import your project tracking database (.xlsx) to analyze dashboards, timelines, and checklists.</p>
+    </div>
+    <button class="btn-primary" id="empty-import-btn">${svgIcon('upload')} Select Excel File</button>
+  </div>`;
+}
+
+/* ============================================================
+   16. MODALS
+   ============================================================ */
+function openModal(html, onMount) {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.id = 'active-modal';
+  backdrop.innerHTML = `<div class="modal-box">${html}</div>`;
+  document.body.appendChild(backdrop);
+  lucide.createIcons();
+  if (onMount) onMount(backdrop);
+
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) closeModal();
+  });
+
+  backdrop.querySelectorAll('.modal-close').forEach(btn => {
+    btn.addEventListener('click', closeModal);
+  });
+}
+
+function closeModal() {
+  const modal = document.getElementById('active-modal');
+  if (modal) modal.remove();
+}
+
+/* — Add/Edit Project — */
+function openAddProjectModal() {
+  const pm = state.teamMembers[0]?.name || '';
+  const pmOptions = state.teamMembers.map(m => `<option value="${escHtml(m.name)}">${escHtml(m.name)} (${escHtml(m.role)})</option>`).join('');
+  const todayStr = new Date().toISOString().split('T')[0];
+  const oneMonthLater = new Date();
+  oneMonthLater.setMonth(oneMonthLater.getMonth() + 1);
+  const oneMonthLaterStr = oneMonthLater.toISOString().split('T')[0];
+
+  openModal(`
+    <div class="modal-header">
+      <h3 class="modal-title">Create New Project</h3>
+      <button class="modal-close">&times;</button>
+    </div>
+    <form id="add-project-form" class="space-y-4" style="font-size:12px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div class="form-group" style="grid-column:1/-1"><label class="form-label">Project Name *</label>
+          <input type="text" name="name" required class="form-input" placeholder="e.g. Finance Ledger Automation"></div>
+        <div class="form-group" style="grid-column:1/-1"><label class="form-label">Project Description</label>
+          <textarea name="desc" rows="3" class="form-input" placeholder="Specify project scope, outputs and deliverables..."></textarea></div>
+        <div class="form-group"><label class="form-label">Department *</label>
+          <input type="text" name="dept" required class="form-input" placeholder="e.g. exports, imports, finance"></div>
+        <div class="form-group"><label class="form-label">Project Manager *</label>
+          <select name="pm" class="form-input">${pmOptions}</select></div>
+        <div class="form-group"><label class="form-label">Planned Start Date *</label>
+          <input type="date" name="plannedStart" required class="form-input" value="${todayStr}"></div>
+        <div class="form-group"><label class="form-label">Planned End Date *</label>
+          <input type="date" name="plannedEnd" required class="form-input" value="${oneMonthLaterStr}"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-ghost modal-close">Cancel</button>
+        <button type="submit" class="btn-primary">Create Project</button>
+      </div>
+    </form>`, (modal) => {
+    modal.querySelector('#add-project-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const newId = String(state.projects.length > 0 ? Math.max(...state.projects.map(p => Number(p.ID) || 0)) + 1 : 1);
+      const newProj = {
+        ID: newId,
+        Name: fd.get('name'),
+        Description: fd.get('desc'),
+        Department: fd.get('dept') || 'Steel',
+        ProjectManager: fd.get('pm') || pm,
+        Spent: 0,
+        BaseSpent: 0,
+        PlannedStartDate: fd.get('plannedStart'),
+        PlannedEndDate: fd.get('plannedEnd'),
+        ActualStartDate: fd.get('plannedStart'),
+        ActualEndDate: '',
+        Progress: 0,
+        Status: 'on-track',
+        DaysDelayed: 0,
+        Benefits: ''
+      };
+      state.projects = [...state.projects, newProj];
+      saveStateToServer(state.projects, state.tasks, state.teamMembers, state.srfs);
+      showToast(`Created Project: ${newProj.Name}`);
+      closeModal();
+      navigateTo('workspace', newId);
+    });
+  });
+}
+
+function openEditProjectModal() {
+  const project = state.projects.find(p => p.ID === state.activeProjectId);
+  if (!project) return;
+  const pmOptions = state.teamMembers.map(m => `<option value="${escHtml(m.name)}" ${m.name === project.ProjectManager ? 'selected' : ''}>${escHtml(m.name)} (${escHtml(m.role)})</option>`).join('');
+  openModal(`
+    <div class="modal-header">
+      <h3 class="modal-title">Edit Project Workspace</h3>
+      <button class="modal-close">&times;</button>
+    </div>
+    <form id="edit-project-form" class="space-y-4" style="font-size:12px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div class="form-group" style="grid-column:1/-1"><label class="form-label">Project Name *</label>
+          <input type="text" name="name" required class="form-input" value="${escHtml(project.Name)}"></div>
+        <div class="form-group" style="grid-column:1/-1"><label class="form-label">Project Description</label>
+          <textarea name="desc" rows="3" class="form-input">${escHtml(project.Description)}</textarea></div>
+        <div class="form-group"><label class="form-label">Department *</label>
+          <input type="text" name="dept" required class="form-input" value="${escHtml(project.Department)}"></div>
+        <div class="form-group"><label class="form-label">Project Manager *</label>
+          <select name="pm" class="form-input">${pmOptions}</select></div>
+        <div class="form-group"><label class="form-label">Spent (INR)</label>
+          <input type="number" name="spent" class="form-input" value="${project.BaseSpent !== undefined ? project.BaseSpent : (project.Spent || 0)}"></div>
+        <div class="form-group"><label class="form-label">Planned Start Date</label>
+          <input type="date" name="plannedStart" class="form-input" value="${escHtml(project.PlannedStartDate || '')}"></div>
+        <div class="form-group"><label class="form-label">Planned End Date</label>
+          <input type="date" name="plannedEnd" class="form-input" value="${escHtml(project.PlannedEndDate || '')}"></div>
+        <div class="form-group"><label class="form-label">Actual Start Date</label>
+          <input type="date" name="actualStart" class="form-input" value="${escHtml(project.ActualStartDate || '')}"></div>
+        <div class="form-group"><label class="form-label">Actual End Date</label>
+          <input type="date" name="actualEnd" class="form-input" value="${escHtml(project.ActualEndDate || '')}"></div>
+        <div class="form-group" style="grid-column:1/-1"><label class="form-label">Project Benefits / Savings (e.g. 10 man days, ₹250000)</label>
+          <input type="text" name="benefits" class="form-input" value="${escHtml(project.Benefits || '')}"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-ghost modal-close">Cancel</button>
+        <button type="submit" class="btn-primary">Save Changes</button>
+      </div>
+    </form>`, (modal) => {
+    modal.querySelector('#edit-project-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const baseSpent = Number(fd.get('spent')) || 0;
+      const updated = { ...project, Name: fd.get('name'), Description: fd.get('desc'), Department: fd.get('dept'), ProjectManager: fd.get('pm'), BaseSpent: baseSpent, Spent: baseSpent, PlannedStartDate: fd.get('plannedStart'), PlannedEndDate: fd.get('plannedEnd'), ActualStartDate: fd.get('actualStart'), ActualEndDate: fd.get('actualEnd'), Benefits: fd.get('benefits') };
+      state.projects = state.projects.map(p => p.ID === project.ID ? updated : p);
+      recalculateAll();
+      saveStateToServer(state.projects, state.tasks, state.teamMembers, state.srfs);
+      showToast('Project workspace details updated.');
+      closeModal();
+      render();
+    });
+  });
+}
+
+/* — Add/Edit Task — */
+function openAddTaskModal() {
+  openTaskModal(null);
+}
+
+function openEditTaskModal(taskId) {
+  const task = state.tasks.find(t => t.ProjectID === state.activeProjectId && t.ID === taskId);
+  if (task) openTaskModal(task);
+}
+
+function openTaskModal(task) {
+  const isEditing = !!task;
+  const pmOptions = state.teamMembers.map(m => `<option value="${escHtml(m.name)}" ${task && task.Assignee === m.name ? 'selected' : (!task && m === state.teamMembers[0]) ? 'selected' : ''}>${escHtml(m.name)}</option>`).join('');
+  const reporterOptions = `<option value="">Select reporter</option>${state.teamMembers.map(m => `<option value="${escHtml(m.name)}" ${task && task.DelayReportedBy === m.name ? 'selected' : ''}>${escHtml(m.name)}</option>`).join('')}`;
+
+  openModal(`
+    <div class="modal-header">
+      <h3 class="modal-title">${isEditing ? 'Edit Checklist Task' : 'Add Checklist Task'}</h3>
+      <button class="modal-close">&times;</button>
+    </div>
+    <form id="task-form" class="space-y-4" style="font-size:12px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div class="form-group"><label class="form-label">Task ID * (e.g. 1, 1.1, 1.1.1)</label>
+          <input type="text" name="taskId" required class="form-input" placeholder="e.g. 1.2" value="${escHtml(task ? task.ID : '')}"></div>
+        <div class="form-group"><label class="form-label">Assignee *</label>
+          <select name="assignee" class="form-input">${pmOptions}</select></div>
+        <div class="form-group" style="grid-column:1/-1"><label class="form-label">Activity Name *</label>
+          <input type="text" name="taskName" required class="form-input" value="${escHtml(task ? task.Name : '')}"></div>
+        <div class="form-group"><label class="form-label">Planned Start Date</label>
+          <input type="date" name="plannedStart" class="form-input" value="${escHtml(task ? task.PlannedStartDate || '' : '')}"></div>
+        <div class="form-group"><label class="form-label">Planned End Date</label>
+          <input type="date" name="plannedEnd" class="form-input" value="${escHtml(task ? task.PlannedEndDate || '' : '')}"></div>
+        <div class="form-group"><label class="form-label">Actual Start Date</label>
+          <input type="date" name="actualStart" class="form-input" value="${escHtml(task ? task.ActualStartDate || '' : '')}"></div>
+        <div class="form-group"><label class="form-label">Actual End Date</label>
+          <input type="date" name="actualEnd" class="form-input" value="${escHtml(task ? task.ActualEndDate || '' : '')}"></div>
+        <div class="form-group" style="grid-column:1/-1;padding-top:12px;border-top:1px solid var(--slate-800)">
+          <h4 style="font-weight:600;color:var(--text-secondary);margin-bottom:12px;font-size:12px">Timeline Delay Documentation (Fill if delayed)</h4>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <div class="form-group" style="grid-column:1/-1"><label class="form-label">Reported By</label>
+              <select name="reportedBy" class="form-input">${reporterOptions}</select></div>
+            <div class="form-group" style="grid-column:1/-1"><label class="form-label">Delay Root Cause</label>
+              <input type="text" name="delayReason" class="form-input" placeholder="e.g. Server downtime, awaiting API specifications..." value="${escHtml(task ? task.DelayReason || '' : '')}"></div>
+            <div class="form-group" style="grid-column:1/-1"><label class="form-label">Downstream Impact</label>
+              <input type="text" name="delayImpact" class="form-input" placeholder="e.g. Delays staging deploy, blocks UAT start..." value="${escHtml(task ? task.DelayImpact || '' : '')}"></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-ghost modal-close">Cancel</button>
+        <button type="submit" class="btn-primary">Save Task</button>
+      </div>
+    </form>`, (modal) => {
+    const taskIdInput = modal.querySelector('input[name="taskId"]');
+    const startInput = modal.querySelector('input[name="plannedStart"]');
+    const endInput = modal.querySelector('input[name="plannedEnd"]');
+
+    const handleTaskIdChange = () => {
+      const val = taskIdInput.value.trim();
+      if (!val) return;
+      
+      const project = state.projects.find(p => p.ID === state.activeProjectId);
+      if (!project) return;
+
+      let parentStart = project.PlannedStartDate || '';
+      let parentEnd = project.PlannedEndDate || '';
+
+      const lastDotIndex = val.lastIndexOf('.');
+      if (lastDotIndex !== -1) {
+        const parentId = val.substring(0, lastDotIndex);
+        const parentTask = state.tasks.find(t => t.ProjectID === state.activeProjectId && t.ID === parentId);
+        if (parentTask) {
+          parentStart = parentTask.PlannedStartDate || parentStart;
+          parentEnd = parentTask.PlannedEndDate || parentEnd;
+        }
+      }
+
+      // Populate default dates if they are empty
+      if (!startInput.value && parentStart) {
+        startInput.value = parentStart;
+      }
+      if (!endInput.value && parentEnd) {
+        endInput.value = parentEnd;
+      }
+
+      // Set min and max limits
+      if (parentStart) {
+        startInput.setAttribute('min', parentStart);
+        endInput.setAttribute('min', parentStart);
+      }
+      if (parentEnd) {
+        startInput.setAttribute('max', parentEnd);
+        endInput.setAttribute('max', parentEnd);
+      }
+    };
+
+    taskIdInput.addEventListener('input', handleTaskIdChange);
+    taskIdInput.addEventListener('change', handleTaskIdChange);
+    taskIdInput.addEventListener('blur', handleTaskIdChange);
+
+    // Run once on load
+    handleTaskIdChange();
+
+    modal.querySelector('#task-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const updatedTask = {
+        ID: fd.get('taskId'),
+        ProjectID: state.activeProjectId,
+        Name: fd.get('taskName'),
+        Assignee: fd.get('assignee'),
+        PlannedStartDate: fd.get('plannedStart'),
+        PlannedEndDate: fd.get('plannedEnd'),
+        ActualStartDate: fd.get('actualStart'),
+        ActualEndDate: fd.get('actualEnd'),
+        Progress: task ? task.Progress || 0 : 0,
+        Status: task ? task.Status || 'not-started' : 'not-started',
+        DaysDelayed: task ? task.DaysDelayed || 0 : 0,
+        DelayReason: fd.get('delayReason'),
+        DelayImpact: fd.get('delayImpact'),
+        DelayReportedBy: fd.get('reportedBy')
+      };
+      let newTasks = [...state.tasks];
+      if (isEditing) {
+        newTasks = newTasks.map(t => (t.ProjectID === state.activeProjectId && t.ID === task.ID) ? updatedTask : t);
+      } else {
+        newTasks.push(updatedTask);
+      }
+      const { updatedProjects } = performProjectRollups(state.activeProjectId, newTasks, state.projects);
+      state.tasks = newTasks;
+      state.projects = updatedProjects;
+      saveStateToServer(state.projects, state.tasks, state.teamMembers, state.srfs);
+      showToast(isEditing ? 'Task updated.' : 'Task added.');
+      closeModal();
+      render();
+    });
+  });
+}
+
+/* — Add/Edit Kaizen — */
+function openAddKaizenModal() {
+  openKaizenModal(null);
+}
+
+function openEditKaizenModal(kaizen) {
+  openKaizenModal(kaizen);
+}
+
+function openKaizenModal(kaizen) {
+  const isEditing = !!kaizen;
+  const gradeOptions = ['L1', 'L2', 'L3'].map(g => `<option value="${g}" ${kaizen && kaizen.Grade === g ? 'selected' : ''}>Grade ${g}</option>`).join('');
+
+  openModal(`
+    <div class="modal-header">
+      <h3 class="modal-title">${isEditing ? 'Edit Kaizen Initiative' : 'Add Kaizen Initiative'}</h3>
+      <button class="modal-close">&times;</button>
+    </div>
+    <form id="kaizen-form" class="space-y-4" style="font-size:12px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div class="form-group"><label class="form-label">Kaizen ID * (e.g. K1, K2)</label>
+          <input type="text" name="kaizenId" required class="form-input" placeholder="e.g. K1" value="${escHtml(kaizen ? kaizen.ID : '')}" ${isEditing ? 'readonly' : ''}></div>
+        <div class="form-group"><label class="form-label">Grade *</label>
+          <select name="grade" class="form-input">${gradeOptions}</select></div>
+        <div class="form-group" style="grid-column:1/-1"><label class="form-label">Title / Description *</label>
+          <input type="text" name="title" required class="form-input" placeholder="e.g. Automate form field extraction using AI" value="${escHtml(kaizen ? kaizen.Title : '')}"></div>
+        <div class="form-group" style="grid-column:1/-1"><label class="form-label">Uploaded On (Date)</label>
+          <input type="date" name="uploadedOn" class="form-input" value="${escHtml(kaizen ? kaizen.UploadedOn || '' : '')}"></div>
+        <div class="form-group"><label class="form-label">Approved by L+1 (Date)</label>
+          <input type="date" name="approvedL1" class="form-input" value="${escHtml(kaizen ? kaizen.ApprovedL1 || '' : '')}"></div>
+        <div class="form-group"><label class="form-label">Approved by L+2 (Date)</label>
+          <input type="date" name="approvedL2" class="form-input" value="${escHtml(kaizen ? kaizen.ApprovedL2 || '' : '')}"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-ghost modal-close">Cancel</button>
+        <button type="submit" class="btn-primary">Save Kaizen</button>
+      </div>
+    </form>`, (modal) => {
+    modal.querySelector('#kaizen-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const updatedKaizen = {
+        ProjectID: state.activeProjectId,
+        ID: fd.get('kaizenId'),
+        Title: fd.get('title'),
+        Grade: fd.get('grade'),
+        UploadedOn: fd.get('uploadedOn') || '',
+        ApprovedL1: fd.get('approvedL1') || '',
+        ApprovedL2: fd.get('approvedL2') || ''
+      };
+      
+      let newKaizens = [...state.kaizens];
+      if (isEditing) {
+        newKaizens = newKaizens.map(k => (k.ProjectID === state.activeProjectId && k.ID === kaizen.ID) ? updatedKaizen : k);
+      } else {
+        newKaizens.push(updatedKaizen);
+      }
+      state.kaizens = newKaizens;
+      saveStateToServer(state.projects, state.tasks, state.teamMembers, state.srfs, state.kaizens);
+      showToast(isEditing ? 'Kaizen updated.' : 'Kaizen added.');
+      closeModal();
+      render();
+    });
+  });
+}
+
+/* — Add/Edit SRF — */
+function openAddSRFModal() {
+  openSRFModal(null);
+}
+
+function openEditSRFModal(srfNo) {
+  const srfItem = state.srfs.find(s => s.ProjectID === state.activeProjectId && s.SRFNo === srfNo);
+  if (srfItem) openSRFModal(srfItem);
+}
+
+function openSRFModal(srfItem) {
+  const isEditing = !!srfItem;
+  const project = state.projects.find(p => p.ID === state.activeProjectId);
+  const projectSRFs = state.srfs.filter(s => s.ProjectID === state.activeProjectId);
+  const defaultSRFNo = `SRF-${state.activeProjectId}-${projectSRFs.length + 1}`;
+
+  const statusOptions = SRF_STEPS.map(s => `<option value="${escHtml(s.label)}" ${srfItem && srfItem.Status === s.label ? 'selected' : ''}>${escHtml(s.label)}</option>`).join('');
+  const dateInputs = SRF_STEPS.map(step => `<div class="form-group"><label class="form-label">${escHtml(step.label)}</label>
+    <input type="date" name="date_${step.key}" class="form-input" value="${escHtml(srfItem ? srfItem[step.key] || '' : '')}"></div>`).join('');
+
+  openModal(`
+    <div class="modal-header">
+      <h3 class="modal-title">${isEditing ? 'Edit SRF Contract' : 'Add SRF Contract'}</h3>
+      <button class="modal-close">&times;</button>
+    </div>
+    <form id="srf-form" class="space-y-4" style="font-size:12px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div class="form-group"><label class="form-label">SRF Number *</label>
+          <input type="text" name="srfNo" required class="form-input" value="${escHtml(srfItem ? srfItem.SRFNo : defaultSRFNo)}"></div>
+        <div class="form-group"><label class="form-label">User (Requester) *</label>
+          <input type="text" name="user" required class="form-input" value="${escHtml(srfItem ? srfItem.User : project?.ProjectManager || '')}"></div>
+        <div class="form-group" style="grid-column:1/-1"><label class="form-label">Developments Scope Description *</label>
+          <input type="text" name="developments" required class="form-input" placeholder="e.g. Master forms integration, webhooks Callback module..." value="${escHtml(srfItem ? srfItem.Developments : '')}"></div>
+        <div class="form-group"><label class="form-label">Mandays FC (Functional) *</label>
+          <input type="number" name="mandaysFC" required class="form-input" value="${srfItem ? srfItem.MandaysFC : 0}"></div>
+        <div class="form-group"><label class="form-label">Mandays TC (Technical) *</label>
+          <input type="number" name="mandaysTC" required class="form-input" value="${srfItem ? srfItem.MandaysTC : 0}"></div>
+        <div class="form-group"><label class="form-label">Development Cost (INR) *</label>
+          <input type="number" name="cost" required class="form-input" value="${srfItem ? srfItem.Cost : 0}"></div>
+        <div class="form-group"><label class="form-label">Status Stage *</label>
+          <select name="status" class="form-input">${statusOptions}</select></div>
+        <div class="form-group" style="grid-column:1/-1;padding-top:12px;border-top:1px solid var(--slate-800)">
+          <h4 style="font-weight:600;color:var(--text-secondary);margin-bottom:12px">Milestone Phase Dates (YYYY-MM-DD)</h4>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">${dateInputs}</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-ghost modal-close">Cancel</button>
+        <button type="submit" class="btn-primary" style="background:var(--rose-500)">Save SRF Contract</button>
+      </div>
+    </form>`, (modal) => {
+    modal.querySelector('#srf-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const srfEntry = {
+        ProjectID: state.activeProjectId,
+        SRFNo: fd.get('srfNo'),
+        Developments: fd.get('developments'),
+        User: fd.get('user'),
+        MandaysFC: Number(fd.get('mandaysFC')),
+        MandaysTC: Number(fd.get('mandaysTC')),
+        TotalMandays: Number(fd.get('mandaysFC')) + Number(fd.get('mandaysTC')),
+        Cost: Number(fd.get('cost')),
+        Status: fd.get('status'),
+        ...Object.fromEntries(SRF_STEPS.map(s => [s.key, fd.get(`date_${s.key}`) || '']))
+      };
+      let newSRFs = [...state.srfs];
+      if (isEditing) {
+        newSRFs = newSRFs.map(s => (s.ProjectID === state.activeProjectId && s.SRFNo === srfItem.SRFNo) ? srfEntry : s);
+      } else {
+        newSRFs.push(srfEntry);
+      }
+      const { updatedProjects } = performProjectRollups(state.activeProjectId, state.tasks, state.projects, newSRFs);
+      state.srfs = newSRFs;
+      state.projects = updatedProjects;
+      saveStateToServer(state.projects, state.tasks, state.teamMembers, state.srfs);
+      showToast('SRF records updated.');
+      closeModal();
+      render();
+    });
+  });
+}
+
+/* ============================================================
+   17. EVENT SETUP (called after each render)
+   ============================================================ */
+function setupViewEvents() {
+  const vc = document.getElementById('view-container');
+  if (!vc) return;
+
+  // Dashboard events
+  vc.querySelector('#clear-dept-filter')?.addEventListener('click', () => { state.selectedDept = null; render(); });
+  vc.querySelector('#clear-dept-filter2')?.addEventListener('click', () => { state.selectedDept = null; render(); });
+  vc.querySelector('#btn-convert-financial')?.addEventListener('click', () => { state.benefitsConverted = true; render(); });
+  vc.querySelector('#btn-show-mandays')?.addEventListener('click', () => { state.benefitsConverted = false; render(); });
+
+  vc.querySelectorAll('.dept-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const dept = el.dataset.dept;
+      state.selectedDept = state.selectedDept === dept ? null : dept;
+      render();
+    });
+  });
+
+  vc.querySelectorAll('.project-list-row, .benefit-row').forEach(el => {
+    el.addEventListener('click', () => navigateTo('workspace', el.dataset.projId));
+  });
+
+  // Projects page events
+  const projSearch = vc.querySelector('#proj-search');
+  if (projSearch) {
+    projSearch.addEventListener('input', (e) => { state.projectSearch = e.target.value; render(); });
+    projSearch.focus();
+  }
+  vc.querySelector('#proj-dept-filter')?.addEventListener('change', (e) => { state.projectDeptFilter = e.target.value; render(); });
+  vc.querySelector('#proj-status-filter')?.addEventListener('change', (e) => { state.projectStatusFilter = e.target.value; render(); });
+  vc.querySelector('#proj-sort')?.addEventListener('change', (e) => { state.projectSortBy = e.target.value; render(); });
+  vc.querySelector('#add-project-btn')?.addEventListener('click', openAddProjectModal);
+  vc.querySelectorAll('.project-card').forEach(el => {
+    el.addEventListener('click', () => navigateTo('workspace', el.dataset.projId));
+  });
+
+  // Workspace events
+  vc.querySelector('#ws-back-btn')?.addEventListener('click', () => navigateTo('projects'));
+  vc.querySelector('#ws-edit-btn')?.addEventListener('click', openEditProjectModal);
+  vc.querySelector('#ws-delete-btn')?.addEventListener('click', () => {
+    if (window.confirm('Are you sure you want to delete this project? All associated tasks and SRFs will be deleted.')) {
+      const id = state.activeProjectId;
+      state.projects = state.projects.filter(p => p.ID !== id);
+      state.tasks = state.tasks.filter(t => t.ProjectID !== id);
+      state.srfs = state.srfs.filter(s => s.ProjectID !== id);
+      saveStateToServer(state.projects, state.tasks, state.teamMembers, state.srfs);
+      showToast('Project deleted.');
+      navigateTo(state.projects.length > 0 ? 'projects' : 'empty');
+    }
+  });
+
+  vc.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => { state.workspaceTab = btn.dataset.tab; render(); });
+  });
+
+  vc.querySelectorAll('.btn-group-item[data-gantt-scale]').forEach(btn => {
+    btn.addEventListener('click', () => { state.ganttScale = btn.dataset.ganttScale; render(); });
+  });
+
+  // Task events
+  vc.querySelector('#add-task-btn')?.addEventListener('click', openAddTaskModal);
+  vc.querySelector('#task-assignee-filter')?.addEventListener('change', (e) => { state.taskAssigneeFilter = e.target.value; render(); });
+
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  vc.querySelectorAll('.task-start-check').forEach(chk => {
+    chk.addEventListener('change', (e) => {
+      const taskId = e.target.dataset.taskId;
+      const isChecked = e.target.checked;
+      let newTasks = state.tasks.map(t => {
+        if (t.ProjectID === state.activeProjectId && (t.ID === taskId || t.ID.startsWith(taskId + '.'))) {
+          const updated = { ...t };
+          if (isChecked) {
+            updated.ActualStartDate = t.ActualStartDate || todayStr;
+          } else {
+            updated.ActualStartDate = '';
+            updated.ActualEndDate = '';
+          }
+          return updated;
+        }
+        return t;
+      });
+      const { updatedProjects } = performProjectRollups(state.activeProjectId, newTasks, state.projects);
+      state.tasks = newTasks;
+      state.projects = updatedProjects;
+      saveStateToServer(state.projects, state.tasks, state.teamMembers, state.srfs);
+      render();
+    });
+  });
+
+  vc.querySelectorAll('.task-complete-check').forEach(chk => {
+    chk.addEventListener('change', (e) => {
+      const taskId = e.target.dataset.taskId;
+      const isChecked = e.target.checked;
+      let newTasks = state.tasks.map(t => {
+        if (t.ProjectID === state.activeProjectId && (t.ID === taskId || t.ID.startsWith(taskId + '.'))) {
+          const updated = { ...t };
+          if (isChecked) {
+            updated.ActualEndDate = t.ActualEndDate || todayStr;
+            updated.ActualStartDate = t.ActualStartDate || todayStr;
+          } else {
+            updated.ActualEndDate = '';
+          }
+          return updated;
+        }
+        return t;
+      });
+      const { updatedProjects } = performProjectRollups(state.activeProjectId, newTasks, state.projects);
+      state.tasks = newTasks;
+      state.projects = updatedProjects;
+      saveStateToServer(state.projects, state.tasks, state.teamMembers, state.srfs);
+      render();
+    });
+  });
+
+  vc.querySelectorAll('.task-edit-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => { e.stopPropagation(); openEditTaskModal(btn.dataset.taskId); });
+  });
+
+  vc.querySelectorAll('.task-delete-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (window.confirm('Delete this task? Sub-tasks will remain but lose their parent rollup connection.')) {
+        const taskId = btn.dataset.taskId;
+        state.tasks = state.tasks.filter(t => !(t.ProjectID === state.activeProjectId && t.ID === taskId));
+        saveStateToServer(state.projects, state.tasks, state.teamMembers, state.srfs);
+        render();
+      }
+    });
+  });
+
+  // SRF events
+  vc.querySelector('#add-srf-btn')?.addEventListener('click', openAddSRFModal);
+  vc.querySelector('#edit-srf-btn')?.addEventListener('click', () => {
+    const srfs = state.srfs.filter(s => s.ProjectID === state.activeProjectId);
+    const idx = Math.min(state.selectedSRFIndex, srfs.length - 1);
+    if (srfs[idx]) openEditSRFModal(srfs[idx].SRFNo);
+  });
+  vc.querySelector('#delete-srf-btn')?.addEventListener('click', () => {
+    const srfs = state.srfs.filter(s => s.ProjectID === state.activeProjectId);
+    const idx = Math.min(state.selectedSRFIndex, srfs.length - 1);
+    const srfItem = srfs[idx];
+    if (!srfItem) return;
+    if (window.confirm('Are you sure you want to delete this SRF?')) {
+      state.srfs = state.srfs.filter(s => !(s.ProjectID === state.activeProjectId && s.SRFNo === srfItem.SRFNo));
+      state.selectedSRFIndex = 0;
+      const { updatedProjects } = performProjectRollups(state.activeProjectId, state.tasks, state.projects);
+      state.projects = updatedProjects;
+      saveStateToServer(state.projects, state.tasks, state.teamMembers, state.srfs);
+      render();
+    }
+  });
+
+  vc.querySelectorAll('.srf-tab').forEach(btn => {
+    btn.addEventListener('click', () => { state.selectedSRFIndex = Number(btn.dataset.srfIndex); render(); });
+  });
+
+  vc.querySelectorAll('.srf-step-check').forEach(chk => {
+    chk.addEventListener('change', (e) => {
+      const stepIdx = Number(e.target.dataset.stepIndex);
+      const srfNo = e.target.dataset.srfNo;
+      const srfItem = state.srfs.find(s => s.ProjectID === state.activeProjectId && s.SRFNo === srfNo);
+      if (!srfItem) return;
+      const step = SRF_STEPS[stepIdx];
+      const isStepDone = !!srfItem[step.key];
+      const newDateVal = isStepDone ? '' : new Date().toISOString().split('T')[0];
+      const updated = { ...srfItem, [step.key]: newDateVal };
+      let latestStatus = 'Uploaded On';
+      for (let i = SRF_STEPS.length - 1; i >= 0; i--) {
+        const s = SRF_STEPS[i];
+        if ((i === stepIdx && !isStepDone) || (i !== stepIdx && !!srfItem[s.key])) {
+          latestStatus = s.label; break;
+        }
+      }
+      updated.Status = latestStatus;
+      state.srfs = state.srfs.map(s => (s.ProjectID === state.activeProjectId && s.SRFNo === srfNo) ? updated : s);
+      saveStateToServer(state.projects, state.tasks, state.teamMembers, state.srfs);
+      render();
+    });
+  });
+
+  // Kaizen events
+  vc.querySelector('#add-kaizen-btn')?.addEventListener('click', openAddKaizenModal);
+  vc.querySelectorAll('.kaizen-edit-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const kId = btn.dataset.kaizenId;
+      const kaizen = state.kaizens.find(k => k.ProjectID === state.activeProjectId && k.ID === kId);
+      if (kaizen) openEditKaizenModal(kaizen);
+    });
+  });
+  vc.querySelectorAll('.kaizen-delete-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const kId = btn.dataset.kaizenId;
+      if (window.confirm('Are you sure you want to delete this Kaizen?')) {
+        state.kaizens = state.kaizens.filter(k => !(k.ProjectID === state.activeProjectId && k.ID === kId));
+        saveStateToServer(state.projects, state.tasks, state.teamMembers, state.srfs, state.kaizens);
+        render();
+      }
+    });
+  });
+  vc.querySelectorAll('.kaizen-step-check').forEach(chk => {
+    chk.addEventListener('change', (e) => {
+      const stepKey = e.target.dataset.stepKey;
+      const kaizenId = e.target.dataset.kaizenId;
+      const kaizenItem = state.kaizens.find(k => k.ProjectID === state.activeProjectId && k.ID === kaizenId);
+      if (!kaizenItem) return;
+      const isDone = !!kaizenItem[stepKey];
+      const newDateVal = isDone ? '' : new Date().toISOString().split('T')[0];
+      const updated = { ...kaizenItem, [stepKey]: newDateVal };
+      state.kaizens = state.kaizens.map(k => (k.ProjectID === state.activeProjectId && k.ID === kaizenId) ? updated : k);
+      saveStateToServer(state.projects, state.tasks, state.teamMembers, state.srfs, state.kaizens);
+      render();
+    });
+  });
+
+  // Empty state
+  vc.querySelector('#empty-import-btn')?.addEventListener('click', () => {
+    document.getElementById('excel-import-input').click();
+  });
+}
+
+/* ============================================================
+   18. STATIC UI SETUP (sidebar, header, etc.)
+   ============================================================ */
+function buildSidebarHTML() {
+  return `
+  <div class="sidebar-top">
+    <div class="sidebar-brand">
+      <span class="brand-emoji">🐊</span>
+      <span class="brand-name">Nava<span>Gator</span></span>
+    </div>
+    <nav class="sidebar-nav">
+      <button class="nav-btn" data-view="dashboard">${svgIcon('layout-dashboard')} Dashboard</button>
+      <button class="nav-btn" data-view="projects">${svgIcon('folder-kanban')} Projects</button>
+      <button class="nav-btn" data-view="team">${svgIcon('users')} Team</button>
+    </nav>
+  </div>
+  <div class="sidebar-footer">
+    <input type="file" id="excel-import-input" accept=".xlsx,.xls" style="display:none">
+    <div class="sidebar-action-row">
+      <button class="sidebar-action-btn" id="import-btn">${svgIcon('upload')} Import</button>
+      <button class="sidebar-action-btn" id="export-btn" disabled>${svgIcon('download')} Export</button>
+    </div>
+    <div class="sidebar-meta">
+      <span>Version 2.0.0</span>
+      <button class="theme-btn" id="theme-btn" title="Toggle Theme">${svgIcon(state.theme === 'dark' ? 'sun' : 'moon')}</button>
+    </div>
+  </div>`;
+}
+
+function setupStaticEvents() {
+  // Nav buttons
+  document.querySelectorAll('.nav-btn[data-view]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.activeProjectId = null;
+      navigateTo(btn.dataset.view);
+    });
+  });
+
+  // Theme toggle
+  document.getElementById('theme-btn')?.addEventListener('click', () => {
+    state.theme = state.theme === 'dark' ? 'light' : 'dark';
+    applyTheme();
+  });
+
+  // Import button
+  document.getElementById('import-btn')?.addEventListener('click', () => {
+    document.getElementById('excel-import-input').click();
+  });
+
+  // File import
+  document.getElementById('excel-import-input')?.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    state.isLoading = true;
+    render();
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const parsed = parseExcelBuffer(evt.target.result);
+        let importedMembers = parsed.teamMembers || [];
+        if (importedMembers.length === 0) {
+          const names = new Set();
+          parsed.projects.forEach(p => p.ProjectManager && names.add(p.ProjectManager));
+          parsed.tasks.forEach(t => t.Assignee && names.add(t.Assignee));
+          importedMembers = [...names].map((name, i) => ({
+            id: `tm${i + 1}`, name, role: 'Consultant', department: 'steel'
+          }));
+        }
+        state.projects = parsed.projects;
+        state.tasks = parsed.tasks;
+        state.teamMembers = importedMembers;
+        state.srfs = parsed.srfs;
+        state.kaizens = parsed.kaizens || [];
+        initBaseSpent();
+        recalculateAll();
+        state.currentView = state.projects.length > 0 ? 'dashboard' : 'empty';
+        saveStateToServer(state.projects, state.tasks, state.teamMembers, state.srfs, state.kaizens);
+        showToast('Database imported successfully!');
+      } catch (err) {
+        console.error('Import failed:', err);
+        showToast('Invalid Excel database schema', 'error');
+        state.currentView = 'empty';
+      } finally {
+        state.isLoading = false;
+        e.target.value = '';
+        render();
+        updateExportBtn();
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+
+  // Export button
+  document.getElementById('export-btn')?.addEventListener('click', async () => {
+    try {
+      const buffer = await exportExcelWorkbook({ projects: state.projects, tasks: state.tasks, teamMembers: state.teamMembers, srfs: state.srfs });
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'database.xlsx';
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('Workbook downloaded successfully!');
+    } catch (err) {
+      console.error('Export failed:', err);
+      showToast('Failed to compile workbook', 'error');
+    }
+  });
+
+  // Create project button (in header)
+  document.getElementById('create-project-btn')?.addEventListener('click', openAddProjectModal);
+}
+
+function updateExportBtn() {
+  const btn = document.getElementById('export-btn');
+  if (btn) btn.disabled = state.projects.length === 0;
+}
+
+/* ============================================================
+   19. INIT
+   ============================================================ */
+document.addEventListener('DOMContentLoaded', async () => {
+  // Build sidebar
+  const sidebar = document.getElementById('app-sidebar');
+  if (sidebar) {
+    sidebar.innerHTML = buildSidebarHTML();
+    lucide.createIcons({ nodes: [sidebar] });
+  }
+
+  applyTheme();
+  setupStaticEvents();
+  await initDatabase();
+  updateExportBtn();
+});

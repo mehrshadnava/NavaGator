@@ -296,7 +296,17 @@ try {
   });
 
   // Clean intermediate fields before writing to sheet
-  tasksList.forEach(t => delete t['_remarks']);
+  projectsList.forEach(p => {
+    delete p['Project Budget'];
+    delete p['Project Status'];
+    delete p['Project Progress'];
+  });
+  tasksList.forEach(t => {
+    delete t['_remarks'];
+    delete t['Task Status'];
+    delete t['Task Days Delayed'];
+    delete t['Task Progress'];
+  });
 
   // Extract unique team members
   const uniqueMembers = new Set();
@@ -349,18 +359,42 @@ try {
     addTeamMember(t['Task Assignee'], dept);
   });
 
+  // Seed Kaizens
+  const kaizensList = [
+    {
+      'Project id': '1',
+      'Kaizen Id': 'K1',
+      'Title': 'Automate form field extraction using AI',
+      'Uploaded On': '2026-06-01',
+      'Approved by L+1': '2026-06-05',
+      'Approved by L+2': '2026-06-10',
+      'Grade': 'L1'
+    },
+    {
+      'Project id': '2',
+      'Kaizen Id': 'K1',
+      'Title': 'Optimize database index search speed',
+      'Uploaded On': '2026-06-02',
+      'Approved by L+1': '2026-06-04',
+      'Approved by L+2': '',
+      'Grade': 'L2'
+    }
+  ];
+
   // Write new workbook database.xlsx
   const wbOutput = XLSX.utils.book_new();
   const wsProjects = XLSX.utils.json_to_sheet(projectsList);
   const wsTasks = XLSX.utils.json_to_sheet(tasksList);
   const wsMembers = XLSX.utils.json_to_sheet(teamMembersList);
+  const wsKaizen = XLSX.utils.json_to_sheet(kaizensList);
 
   XLSX.utils.book_append_sheet(wbOutput, wsProjects, 'Project Details');
   XLSX.utils.book_append_sheet(wbOutput, wsTasks, 'Tasks');
   XLSX.utils.book_append_sheet(wbOutput, wsMembers, 'TeamMembers');
+  XLSX.utils.book_append_sheet(wbOutput, wsKaizen, 'Kaizen');
 
   XLSX.writeFile(wbOutput, 'database.xlsx');
-  console.log(`Successfully generated database.xlsx with ${projectsList.length} projects, ${tasksList.length} tasks, and ${teamMembersList.length} team members.`);
+  console.log(`Successfully generated database.xlsx with ${projectsList.length} projects, ${tasksList.length} tasks, ${teamMembersList.length} team members, and ${kaizensList.length} Kaizens.`);
 } catch (e) {
   console.error('Migration execution failed:', e);
 }
