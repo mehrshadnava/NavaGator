@@ -1056,15 +1056,24 @@ html.light .kpi-card {
 }
 
 .kpi-card.border-brand {
-  border-left: 4px solid var(--brand-500);
+  border-left: none;
 }
 
 .kpi-card.border-amber {
-  border-left: 4px solid var(--amber-500);
+  border-left: none;
 }
 
 .kpi-card.border-emerald {
-  border-left: 4px solid var(--emerald-500);
+  border-left: none;
+}
+
+.kpi-card.border-yellow {
+  border-left: none;
+}
+
+.kpi-icon.yellow {
+  background: rgba(234, 179, 8, 0.1);
+  color: #ffd700;
 }
 
 .kpi-icon {
@@ -1709,7 +1718,7 @@ html.light .project-card {
 
 .gantt-time-col-bottom {
   position: absolute;
-  top: 22px;
+  top: 0;
   height: 22px;
   display: flex;
   align-items: center;
@@ -2985,7 +2994,7 @@ html.light .description-card {
 .checklist-checkbox-custom {
   width: 22px;
   height: 22px;
-  border-radius: 6px;
+  border-radius: 50% !important;
   border: 2px solid var(--slate-600);
   background: var(--slate-900);
   transition: all var(--t-fast);
@@ -3528,9 +3537,29 @@ html.light .kaizen-pipeline-line {
   background: var(--blue-500);
   border-color: var(--blue-500);
   color: white;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.4);
 }
 .checklist-check-wrapper input.task-complete-check:checked ~ .checklist-checkbox-custom {
   background: var(--emerald-500);
   border-color: var(--emerald-500);
   color: white;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
+}
+
+.checklist-check-item-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  position: relative;
+}
+
+@keyframes cardPulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.03); }
+  100% { transform: scale(1); }
+}
+.pulse-effect {
+  animation: cardPulse 0.4s ease-out;
 }

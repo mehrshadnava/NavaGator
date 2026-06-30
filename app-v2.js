@@ -33,6 +33,7 @@ const state = {
   selectedSRFIndex: 0,
   editingTask: null,
   editingSRF: null,
+  collapsedTasks: [],
 };
 
 /* ============================================================
@@ -809,9 +810,14 @@ function performProjectRollups(projId, currentTasks, currentProjects, currentSrf
     const maxTaskDelay = targetTasks.reduce((max, t) => Math.max(max, t.DaysDelayed || 0), 0);
     const finalDelayDays = Math.max(projectDelayDays, maxTaskDelay);
     let status = p.Status;
-    if (calculatedProgress === 100 || p.ActualEndDate) status = 'completed';
-    else if (finalDelayDays > 0) status = 'delayed';
-    else if (status !== 'at-risk') status = 'on-track';
+    const allTasksCompleted = projTasks.length > 0 && projTasks.every(t => !!t.ActualEndDate);
+    if (allTasksCompleted || (projTasks.length === 0 && p.ActualEndDate)) {
+      status = 'completed';
+    } else {
+      if (status === 'completed') status = 'on-track';
+      if (finalDelayDays > 0) status = 'delayed';
+      else if (status !== 'at-risk') status = 'on-track';
+    }
 
     const linkedSRFs = currentSrfs.filter(s => s.ProjectID === projId);
     const totalSRFCost = linkedSRFs.reduce((s, sr) => s + (sr.Cost || 0), 0);
@@ -1043,6 +1049,8 @@ function renderDashboard(container) {
   const total = dp.length;
   const completed = dp.filter(p => p.Status === 'completed').length;
   const active = dp.filter(p => p.Status !== 'completed').length;
+  const projectIds = new Set(dp.map(p => p.ID));
+  const kaizenCount = state.kaizens.filter(k => projectIds.has(k.ProjectID)).length;
   const sc = {
     completed,
     'on-track': dp.filter(p => p.Status === 'on-track').length,
@@ -1116,10 +1124,11 @@ function renderDashboard(container) {
       </div>
       <div style="display:flex;align-items:center;gap:16px;flex-shrink:0">
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+      <div style="display:flex;align-items:center;gap:16px;flex-shrink:0">
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
           <span style="font-size:10px;color:var(--text-muted)">Progress: <span style="font-weight:700;color:white">${p.Progress || 0}%</span></span>
           <div class="progress-track h-1" style="width:80px"><div class="progress-fill" style="height:100%;border-radius:999px;background:${progressFill};width:${p.Progress || 0}%"></div></div>
         </div>
-        <span class="badge ${statusClass}">${escHtml(getStatusText(p.Status))}</span>
       </div>
     </div>`;
   }).join('') || `<div class="text-center py-12 text-dim" style="font-size:12px">No projects belong to this department.</div>`;
@@ -1137,7 +1146,7 @@ function renderDashboard(container) {
     </div>` : ''}
 
     <!-- KPI Row -->
-    <div class="grid grid-3">
+    <div class="grid grid-4">
       <div class="glass-card kpi-card border-brand" style="border-radius:var(--r-2xl)">
         <div class="kpi-icon brand">${svgIcon('folder-kanban')}</div>
         <div><div class="kpi-label">Total Projects</div><div class="kpi-value">${total}</div></div>
@@ -1149,6 +1158,10 @@ function renderDashboard(container) {
       <div class="glass-card kpi-card border-emerald" style="border-radius:var(--r-2xl)">
         <div class="kpi-icon emerald">${svgIcon('check-circle-2')}</div>
         <div><div class="kpi-label">Completed Projects</div><div class="kpi-value">${completed}</div></div>
+      </div>
+      <div class="glass-card kpi-card border-yellow" style="border-radius:var(--r-2xl)">
+        <div class="kpi-icon yellow">${svgIcon('award')}</div>
+        <div><div class="kpi-label">Kaizen Counts</div><div class="kpi-value">${kaizenCount}</div></div>
       </div>
     </div>
 
@@ -1186,21 +1199,21 @@ function renderDashboard(container) {
               <div class="benefit-kpi-icon ${state.benefitsConverted ? 'emerald' : 'muted'}">${svgIcon('indian-rupee')}</div>
               <div>
                 <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:var(--text-muted)">Financial Savings</div>
-                <div style="font-size:15px;font-weight:700;color:white;margin-top:2px">${escHtml(formatCurrency(displaySavings))}</div>
+                <div class="kpi-val" style="font-size:15px;font-weight:700;color:white;margin-top:2px">${escHtml(formatCurrency(displaySavings))}</div>
               </div>
             </div>
             <div class="benefit-kpi-card ${!state.benefitsConverted ? 'active-brand' : 'inactive'}" id="btn-show-mandays" title="Show original man-days">
               <div class="benefit-kpi-icon ${!state.benefitsConverted ? 'brand' : 'muted'}">${svgIcon('calendar-days')}</div>
               <div>
                 <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:var(--text-muted)">Man-Days Saved</div>
-                <div style="font-size:15px;font-weight:700;color:white;margin-top:2px">${displayMD} Days</div>
+                <div class="kpi-val" style="font-size:15px;font-weight:700;color:white;margin-top:2px">${displayMD} Days</div>
               </div>
             </div>
           </div>
           <div class="benefit-breakdown">${benefitRows}</div>
         </div>
         <div style="font-size:10px;color:var(--text-dim);text-align:center;margin-top:12px;padding-top:8px;border-top:1px solid var(--slate-900);width:100%">
-          * Click cards above to toggle conversion. Rate: ₹2,500 per day.
+          * Click cards above to toggle conversion.
         </div>
       </div>
     </div>
@@ -1239,6 +1252,87 @@ function renderDashboard(container) {
   </div>`;
 }
 
+function updateBenefitsUI(converted) {
+  state.benefitsConverted = converted;
+  const btnFinancial = document.getElementById('btn-convert-financial');
+  const btnMandays = document.getElementById('btn-show-mandays');
+  if (!btnFinancial || !btnMandays) return;
+
+  const dp = state.selectedDept ? state.projects.filter(p => p.Department === state.selectedDept) : state.projects;
+  let totalFinancial = 0, totalManDays = 0;
+  dp.forEach(p => {
+    const parsed = parseBenefits(p.Benefits);
+    if (parsed.type === 'cost') totalFinancial += parsed.value;
+    else if (parsed.type === 'mandays') totalManDays += parsed.value;
+  });
+  const convertedMD = totalManDays * 2500;
+  const displaySavings = converted ? totalFinancial + convertedMD : totalFinancial;
+  const displayMD = converted ? 0 : totalManDays;
+
+  // Pulse animation trigger
+  const activeCard = converted ? btnFinancial : btnMandays;
+  activeCard.classList.remove('pulse-effect');
+  void activeCard.offsetWidth; // trigger reflow
+  activeCard.classList.add('pulse-effect');
+  setTimeout(() => activeCard.classList.remove('pulse-effect'), 400);
+
+  // Toggle active/inactive classes
+  if (converted) {
+    btnFinancial.classList.add('active-emerald');
+    btnFinancial.classList.remove('inactive');
+    btnFinancial.querySelector('.benefit-kpi-icon').classList.add('emerald');
+    btnFinancial.querySelector('.benefit-kpi-icon').classList.remove('muted');
+
+    btnMandays.classList.add('inactive');
+    btnMandays.classList.remove('active-brand');
+    btnMandays.querySelector('.benefit-kpi-icon').classList.add('muted');
+    btnMandays.querySelector('.benefit-kpi-icon').classList.remove('brand');
+  } else {
+    btnFinancial.classList.add('inactive');
+    btnFinancial.classList.remove('active-emerald');
+    btnFinancial.querySelector('.benefit-kpi-icon').classList.add('muted');
+    btnFinancial.querySelector('.benefit-kpi-icon').classList.remove('emerald');
+
+    btnMandays.classList.add('active-brand');
+    btnMandays.classList.remove('inactive');
+    btnMandays.querySelector('.benefit-kpi-icon').classList.add('brand');
+    btnMandays.querySelector('.benefit-kpi-icon').classList.remove('muted');
+  }
+
+  // Update text values
+  btnFinancial.querySelector('.kpi-val').innerHTML = escHtml(formatCurrency(displaySavings));
+  btnMandays.querySelector('.kpi-val').innerHTML = `${displayMD} Days`;
+
+  // Update the breakdown
+  const breakdown = document.querySelector('.benefit-breakdown');
+  if (breakdown) {
+    const benefitRows = dp.filter(p => p.Benefits).map(p => {
+      const parsed = parseBenefits(p.Benefits);
+      let badgeText = escHtml(p.Benefits);
+      let badgeClass = 'badge';
+      if (parsed.type === 'cost') {
+        badgeText = escHtml(formatCurrency(parsed.value));
+        badgeClass = 'badge badge-emerald';
+      } else if (parsed.type === 'mandays') {
+        badgeText = converted ? escHtml(formatCurrency(parsed.value * 2500)) : `${parsed.value} Man-Days`;
+        badgeClass = converted ? 'badge badge-emerald' : 'badge badge-blue';
+      }
+      return `<div class="benefit-row" data-proj-id="${escHtml(p.ID)}">
+        <div class="min-w-0 flex-1" style="padding-right:12px">
+          <div style="font-size:12px;font-weight:600;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(p.Name)}</div>
+          <div style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.05em;margin-top:2px">${escHtml(p.Department)}</div>
+        </div>
+        <span class="${badgeClass}" style="font-size:10px;padding:2px 10px">${badgeText}</span>
+      </div>`;
+    }).join('') || `<div class="text-center py-8 text-dim" style="font-size:12px">No project benefits logged yet for this filter.</div>`;
+    breakdown.innerHTML = benefitRows;
+    
+    breakdown.querySelectorAll('.benefit-row').forEach(el => {
+      el.addEventListener('click', () => navigateTo('workspace', el.dataset.projId));
+    });
+  }
+}
+
 function buildDonutSVG(sc, total) {
   if (total === 0) {
     return `<svg class="w-full h-full" viewBox="0 0 36 36" style="transform:rotate(-90deg)">
@@ -1267,10 +1361,8 @@ function buildDonutSVG(sc, total) {
 /* ============================================================
    12. PROJECTS PAGE
    ============================================================ */
-function renderProjects(container) {
-  const departments = [...new Set(state.projects.map(p => p.Department).filter(Boolean))];
-
-  let filtered = state.projects.filter(p => {
+function getFilteredProjectsList() {
+  return state.projects.filter(p => {
     const q = state.projectSearch.toLowerCase();
     const matchQ = p.Name.toLowerCase().includes(q) || p.Description.toLowerCase().includes(q) ||
       (p.ProjectManager && p.ProjectManager.toLowerCase().includes(q)) || p.Department.toLowerCase().includes(q);
@@ -1288,8 +1380,11 @@ function renderProjects(container) {
     if (state.projectSortBy === 'savings') return getSavingsNum(b.Benefits) - getSavingsNum(a.Benefits);
     return 0;
   });
+}
 
-  const cards = filtered.length > 0 ? filtered.map(proj => {
+function getProjectCardsHTML() {
+  const filtered = getFilteredProjectsList();
+  return filtered.length > 0 ? filtered.map(proj => {
     let statusText = getStatusText(proj.Status);
     let statusClass = proj.Status === 'delayed' ? 'badge-delayed' : proj.Status === 'at-risk' ? 'badge-at-risk' : proj.Status === 'completed' ? 'badge-completed' : 'badge-on-track';
     let progressColor = proj.Status === 'completed' ? 'var(--brand-500)' : proj.Status === 'delayed' ? 'var(--amber-500)' : proj.Status === 'at-risk' ? 'var(--rose-500)' : 'var(--emerald-500)';
@@ -1331,8 +1426,7 @@ function renderProjects(container) {
           <span style="font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:90px">${escHtml(proj.ProjectManager || 'Unassigned')}</span>
         </div>
         <div style="display:flex;align-items:center;gap:8px">
-          ${proj.DaysDelayed > 0 && proj.Status !== 'completed' ? `<span style="display:flex;align-items:center;gap:2px;color:var(--rose-400);background:rgba(244,63,94,0.1);padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700;border:1px solid rgba(244,63,94,0.2)">${svgIcon('alert-triangle')} ${proj.DaysDelayed}d ongoing</span>` : ''}
-          ${proj.Benefits ? `<span style="display:flex;align-items:center;gap:2px;color:var(--emerald-400);background:rgba(16,185,129,0.1);padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600;border:1px solid rgba(16,185,129,0.2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70px">${svgIcon('trending-up')} ${escHtml(proj.Benefits)}</span>` : ''}
+          ${proj.Benefits ? `<span style="display:flex;align-items:center;gap:4px;color:var(--emerald-400);background:rgba(16,185,129,0.1);padding:4px 8px;border-radius:6px;font-size:10px;font-weight:600;border:1px solid rgba(16,185,129,0.2);margin-left:12px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${svgIcon('trending-up')} ${escHtml(proj.Benefits)}</span>` : ''}
         </div>
       </div>
     </div>`;
@@ -1341,6 +1435,11 @@ function renderProjects(container) {
     <h3 style="color:white;font-size:15px;font-weight:700;margin-top:12px">No projects found</h3>
     <p style="color:var(--text-dim);font-size:12px;margin-top:4px">Adjust search queries or filters to explore other items.</p>
   </div>`;
+}
+
+function renderProjects(container) {
+  const departments = [...new Set(state.projects.map(p => p.Department).filter(Boolean))];
+  const cards = getProjectCardsHTML();
 
   container.innerHTML = `
   <div class="space-y-6 animate-fade-in">
@@ -1373,7 +1472,9 @@ function renderProjects(container) {
             <option value="savings" ${state.projectSortBy === 'savings' ? 'selected' : ''}>Sort by Savings</option>
           </select>
         </div>
-        <button class="btn-primary" id="add-project-btn">${svgIcon('plus')} Add Project</button>
+        <button class="btn-ghost" id="clear-filters-btn" style="border:1px solid var(--slate-800);padding:8px 16px;border-radius:var(--r-lg);color:var(--text-secondary);font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;transition:all 0.2s">
+          ${svgIcon('filter-x')} <span>Clear Filters</span>
+        </button>
       </div>
     </div>
     <div class="projects-grid">${cards}</div>
@@ -1410,12 +1511,12 @@ function renderWorkspace(container) {
       <div style="display:flex;align-items:center;gap:16px">
         <button class="btn-icon" id="ws-back-btn" title="Back to projects">${svgIcon('arrow-left')}</button>
         <div>
+          <h2 style="font-size:20px;font-weight:700;color:white;margin-bottom:6px">${escHtml(project.Name)}</h2>
           <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-muted);text-transform:capitalize">
             <span style="font-weight:600;color:var(--text-secondary);background:var(--slate-850);padding:2px 8px;border-radius:6px;border:1px solid var(--slate-800)">${escHtml(project.Department)}</span>
             <span>•</span>
             <span style="display:flex;align-items:center;gap:4px">${svgIcon('user')} PM: ${escHtml(project.ProjectManager || 'Unassigned')}</span>
           </div>
-          <h2 style="font-size:20px;font-weight:700;color:white;margin-top:6px">${escHtml(project.Name)}</h2>
         </div>
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -1455,7 +1556,8 @@ function renderOverviewTab(project, projectTasks, projectSRFs) {
   const leafTasks = projectTasks.filter(t => !taskIds.some(otherId => otherId.startsWith(t.ID + '.')));
   const inHouseCost = leafTasks.filter(t => !String(t.Assignee).toLowerCase().includes('gitl')).reduce((s, t) => s + (t.Progress * 1500), 0);
   const gitlCost = projectSRFs.reduce((s, sr) => s + (sr.Cost || 0), 0);
-  const totalAlloc = inHouseCost + gitlCost || 1;
+  const totalSpending = inHouseCost + gitlCost;
+  const totalAlloc = totalSpending || 1;
   const inHousePct = Math.round((inHouseCost / totalAlloc) * 100);
   const gitlPct = Math.round((gitlCost / totalAlloc) * 100);
   const progressColor = project.Status === 'completed' ? 'var(--brand-500)' : project.Status === 'delayed' ? 'var(--amber-500)' : 'var(--emerald-500)';
@@ -1475,8 +1577,8 @@ function renderOverviewTab(project, projectTasks, projectSRFs) {
         </div>
       </div>
       <div style="width:100%;background:rgba(59,17,48,0.4);border:1px solid rgba(59,17,48,0.8);border-radius:var(--r-xl);padding:12px;display:flex;justify-content:space-between;font-size:12px">
-        <div><span style="color:var(--text-dim)">Tasks Total:</span> <span style="color:white;font-weight:700">${projectTasks.length}</span></div>
-        <div><span style="color:var(--text-dim)">Completed:</span> <span style="color:var(--emerald-400);font-weight:700">${projectTasks.filter(t => t.Status === 'completed').length}</span></div>
+        <div><span style="color:var(--text-dim)">Tasks Total:</span> <span style="color:white;font-weight:700">${leafTasks.length}</span></div>
+        <div><span style="color:var(--text-dim)">Completed:</span> <span style="color:var(--emerald-400);font-weight:700">${leafTasks.filter(t => t.Status === 'completed').length}</span></div>
       </div>
     </div>
 
@@ -1485,7 +1587,7 @@ function renderOverviewTab(project, projectTasks, projectSRFs) {
       <div>
         <h3 style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:16px">Project Cost Study &amp; Benefits</h3>
         
-        <!-- Highly Highlighted Benefits Banner -->
+        <!-- Highly Highlighted Benefits Banner (Status Removed) -->
         <div style="background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.18);border-radius:var(--r-xl);padding:16px;display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
           <div>
             <div style="font-size:9px;color:var(--emerald-400);text-transform:uppercase;letter-spacing:0.08em;font-weight:700">Project Benefit Output</div>
@@ -1494,27 +1596,30 @@ function renderOverviewTab(project, projectTasks, projectSRFs) {
               ${escHtml(project.Benefits || 'N/A')}
             </div>
           </div>
-          <div style="text-align:right">
-            <span style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.06em">Project Status</span>
-            <span class="badge" style="margin-top:4px;display:inline-block;background:var(--slate-800);border:1px solid var(--slate-750);color:white;font-size:10px">${escHtml(project.Status)}</span>
-          </div>
         </div>
 
-        <!-- Subtle Spendings Panels -->
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;background:rgba(30,30,30,0.25);border:1px solid var(--slate-850);padding:12px;border-radius:var(--r-xl)">
-          <div class="cost-panel-item">
-            <div style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.06em;font-weight:600">Total Spendings</div>
-            <div style="font-size:13px;font-weight:700;color:white;margin-top:2px">${escHtml(formatCurrency(project.Spent || 0))}</div>
+        <!-- Subtle Spendings Panels (Redesigned Grid Cards) -->
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px">
+          <div class="glass-card" style="padding:14px;border:1px solid var(--slate-850);border-radius:12px;background:rgba(28,6,23,0.3);display:flex;align-items:center;gap:12px">
+            <div style="width:32px;height:32px;border-radius:50%;background:rgba(129,0,85,0.15);color:var(--brand-400);display:flex;align-items:center;justify-content:center">${svgIcon('credit-card', 'w-4 h-4')}</div>
+            <div>
+              <div style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.06em;font-weight:700">Total Spending</div>
+              <div style="font-size:14px;font-weight:800;color:white;margin-top:2px">${escHtml(formatCurrency(totalSpending))}</div>
+            </div>
           </div>
-          <div class="cost-panel-item" style="border-left:1px solid var(--slate-800);padding-left:16px">
-            <div style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.06em;font-weight:600">In-house Cost</div>
-            <div style="font-size:13px;font-weight:700;color:var(--text-secondary);margin-top:2px">${escHtml(formatCurrency(inHouseCost))}</div>
-            <div style="font-size:8px;color:var(--text-muted);margin-top:1px">Task leaf logs</div>
+          <div class="glass-card" style="padding:14px;border:1px solid var(--slate-850);border-radius:12px;background:rgba(28,6,23,0.3);display:flex;align-items:center;gap:12px">
+            <div style="width:32px;height:32px;border-radius:50%;background:rgba(59,130,246,0.1);color:var(--blue-400);display:flex;align-items:center;justify-content:center">${svgIcon('users', 'w-4 h-4')}</div>
+            <div>
+              <div style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.06em;font-weight:700">In-House Cost</div>
+              <div style="font-size:14px;font-weight:800;color:var(--text-secondary);margin-top:2px">${escHtml(formatCurrency(inHouseCost))}</div>
+            </div>
           </div>
-          <div class="cost-panel-item" style="border-left:1px solid var(--slate-800);padding-left:16px">
-            <div style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.06em;font-weight:600">GITL / SRF Cost</div>
-            <div style="font-size:13px;font-weight:700;color:var(--rose-400);margin-top:2px">${escHtml(formatCurrency(gitlCost))}</div>
-            <div style="font-size:8px;color:var(--text-muted);margin-top:1px">Linked SRFs</div>
+          <div class="glass-card" style="padding:14px;border:1px solid var(--slate-850);border-radius:12px;background:rgba(28,6,23,0.3);display:flex;align-items:center;gap:12px">
+            <div style="width:32px;height:32px;border-radius:50%;background:rgba(244,63,94,0.1);color:var(--rose-400);display:flex;align-items:center;justify-content:center">${svgIcon('file-spreadsheet', 'w-4 h-4')}</div>
+            <div>
+              <div style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.06em;font-weight:700">GITL / SRF Cost</div>
+              <div style="font-size:14px;font-weight:800;color:var(--rose-400);margin-top:2px">${escHtml(formatCurrency(gitlCost))}</div>
+            </div>
           </div>
         </div>
 
@@ -2227,26 +2332,56 @@ function renderTasksTab(project, projectTasks) {
     const horizontalConnector = level > 0 ? `<div class="checklist-connector-line" style="width: 16px; left: -16px;"></div>` : '';
     const isCompleted = t.Status === 'completed';
 
+    // Collapsible Logic
+    const hasChildren = projectTasks.some(child => {
+      const cp = String(child.ID).split('.');
+      const pp = String(t.ID).split('.');
+      return cp.length === pp.length + 1 && cp.slice(0, pp.length).join('.') === t.ID;
+    });
+
+    const isCollapsed = state.collapsedTasks && state.collapsedTasks.includes(t.ID);
+    const toggleIcon = isCollapsed ? svgIcon('chevron-right', 'w-4 h-4 collapse-toggle-icon') : svgIcon('chevron-down', 'w-4 h-4 collapse-toggle-icon');
+    const toggleButton = hasChildren
+      ? `<button class="task-collapse-btn" data-task-id="${escHtml(t.ID)}" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;margin-right:6px">${toggleIcon}</button>`
+      : `<div style="width:16px;height:16px;display:flex;align-items:center;justify-content:center;margin-right:6px"><span class="dot-spacer" style="width:4px;height:4px;border-radius:50%;background:var(--slate-700)"></span></div>`;
+
+    let isHidden = false;
+    const parts = String(t.ID).split('.');
+    for (let len = 1; len < parts.length; len++) {
+      const ancestorId = parts.slice(0, len).join('.');
+      if (state.collapsedTasks && state.collapsedTasks.includes(ancestorId)) {
+        isHidden = true;
+        break;
+      }
+    }
+
+    if (isHidden) return '';
+
     return `<div class="checklist-card" data-task-id="${escHtml(t.ID)}" style="margin-left: ${level * 24}px; border-left-color: ${borderCol}">
       ${horizontalConnector}
       <div class="checklist-card-main">
         <div style="display:flex;align-items:center;gap:12px;margin-right:12px">
-          <!-- Started Checkbox -->
-          <label class="checklist-check-wrapper" style="display:flex;flex-direction:column;align-items:center;gap:4px" title="Mark Started">
-            <input type="checkbox" ${t.ActualStartDate ? 'checked' : ''} class="task-start-check" data-task-id="${escHtml(t.ID)}">
-            <span class="checklist-checkbox-custom">${svgIcon('play', 'w-3 h-3')}</span>
-            <span style="font-size:8px;color:var(--text-dim);font-weight:600;text-transform:uppercase;letter-spacing:0.04em">Started</span>
+          <!-- Started Checkbox (Redesigned) -->
+          <label class="checklist-check-item-container" title="Mark Started">
+            <div class="checklist-check-wrapper">
+              <input type="checkbox" ${t.ActualStartDate ? 'checked' : ''} class="task-start-check" data-task-id="${escHtml(t.ID)}">
+              <span class="checklist-checkbox-custom">${svgIcon('play', 'w-2.5 h-2.5')}</span>
+            </div>
+            <span style="font-size:8px;color:var(--text-dim);font-weight:600;text-transform:uppercase;letter-spacing:0.04em;margin-top:2px">Started</span>
           </label>
-          <!-- Completed Checkbox -->
-          <label class="checklist-check-wrapper" style="display:flex;flex-direction:column;align-items:center;gap:4px" title="Mark Completed">
-            <input type="checkbox" ${t.ActualEndDate ? 'checked' : ''} class="task-complete-check" data-task-id="${escHtml(t.ID)}">
-            <span class="checklist-checkbox-custom">${svgIcon('check', 'w-3 h-3')}</span>
-            <span style="font-size:8px;color:var(--text-dim);font-weight:600;text-transform:uppercase;letter-spacing:0.04em">Done</span>
+          <!-- Completed Checkbox (Redesigned) -->
+          <label class="checklist-check-item-container" title="Mark Completed">
+            <div class="checklist-check-wrapper">
+              <input type="checkbox" ${t.ActualEndDate ? 'checked' : ''} class="task-complete-check" data-task-id="${escHtml(t.ID)}">
+              <span class="checklist-checkbox-custom">${svgIcon('check', 'w-2.5 h-2.5')}</span>
+            </div>
+            <span style="font-size:8px;color:var(--text-dim);font-weight:600;text-transform:uppercase;letter-spacing:0.04em;margin-top:2px">Done</span>
           </label>
         </div>
         <div class="checklist-info">
-          <div class="checklist-header-info">
-            <span class="checklist-id">${escHtml(t.ID)}</span>
+          <div class="checklist-header-info" style="display:flex;align-items:center;">
+            ${toggleButton}
+            <span class="checklist-id" style="margin-right:6px">${escHtml(t.ID)}</span>
             <span class="checklist-name">${escHtml(t.Name)}</span>
           </div>
           <div class="checklist-meta">
@@ -2263,7 +2398,6 @@ function renderTasksTab(project, projectTasks) {
             <div class="checklist-progress-bar-fill" style="width: ${t.Progress || 0}%; background-color: ${statusCol}"></div>
           </div>
         </div>
-        <span class="badge ${sClass}" style="text-transform:capitalize">${escHtml(getStatusText(t.Status))}</span>
         <div class="checklist-buttons">
           <button class="task-edit-btn" data-task-id="${escHtml(t.ID)}" title="Edit">${svgIcon('edit-3')}</button>
           <button class="task-delete-btn" data-task-id="${escHtml(t.ID)}" title="Delete">${svgIcon('trash-2')}</button>
@@ -2605,6 +2739,9 @@ function openAddProjectModal() {
   const oneMonthLater = new Date();
   oneMonthLater.setMonth(oneMonthLater.getMonth() + 1);
   const oneMonthLaterStr = oneMonthLater.toISOString().split('T')[0];
+  
+  const departments = [...new Set(state.projects.map(p => p.Department).filter(Boolean))];
+  const deptOptions = departments.map(d => `<option value="${escHtml(d)}"></option>`).join('');
 
   openModal(`
     <div class="modal-header">
@@ -2618,7 +2755,11 @@ function openAddProjectModal() {
         <div class="form-group" style="grid-column:1/-1"><label class="form-label">Project Description</label>
           <textarea name="desc" rows="3" class="form-input" placeholder="Specify project scope, outputs and deliverables..."></textarea></div>
         <div class="form-group"><label class="form-label">Department *</label>
-          <input type="text" name="dept" required class="form-input" placeholder="e.g. exports, imports, finance"></div>
+          <input type="text" name="dept" required class="form-input" list="existing-departments" placeholder="Select or type department...">
+          <datalist id="existing-departments">
+            ${deptOptions}
+          </datalist>
+        </div>
         <div class="form-group"><label class="form-label">Project Manager *</label>
           <select name="pm" class="form-input">${pmOptions}</select></div>
         <div class="form-group"><label class="form-label">Planned Start Date *</label>
@@ -2627,7 +2768,6 @@ function openAddProjectModal() {
           <input type="date" name="plannedEnd" required class="form-input" value="${oneMonthLaterStr}"></div>
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn-ghost modal-close">Cancel</button>
         <button type="submit" class="btn-primary">Create Project</button>
       </div>
     </form>`, (modal) => {
@@ -2665,6 +2805,9 @@ function openEditProjectModal() {
   const project = state.projects.find(p => p.ID === state.activeProjectId);
   if (!project) return;
   const pmOptions = state.teamMembers.map(m => `<option value="${escHtml(m.name)}" ${m.name === project.ProjectManager ? 'selected' : ''}>${escHtml(m.name)} (${escHtml(m.role)})</option>`).join('');
+  const departments = [...new Set(state.projects.map(p => p.Department).filter(Boolean))];
+  const deptOptions = departments.map(d => `<option value="${escHtml(d)}"></option>`).join('');
+
   openModal(`
     <div class="modal-header">
       <h3 class="modal-title">Edit Project Workspace</h3>
@@ -2677,7 +2820,11 @@ function openEditProjectModal() {
         <div class="form-group" style="grid-column:1/-1"><label class="form-label">Project Description</label>
           <textarea name="desc" rows="3" class="form-input">${escHtml(project.Description)}</textarea></div>
         <div class="form-group"><label class="form-label">Department *</label>
-          <input type="text" name="dept" required class="form-input" value="${escHtml(project.Department)}"></div>
+          <input type="text" name="dept" required class="form-input" list="existing-departments" value="${escHtml(project.Department)}">
+          <datalist id="existing-departments">
+            ${deptOptions}
+          </datalist>
+        </div>
         <div class="form-group"><label class="form-label">Project Manager *</label>
           <select name="pm" class="form-input">${pmOptions}</select></div>
         <div class="form-group"><label class="form-label">Spent (INR)</label>
@@ -2694,7 +2841,6 @@ function openEditProjectModal() {
           <input type="text" name="benefits" class="form-input" value="${escHtml(project.Benefits || '')}"></div>
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn-ghost modal-close">Cancel</button>
         <button type="submit" class="btn-primary">Save Changes</button>
       </div>
     </form>`, (modal) => {
@@ -2764,7 +2910,6 @@ function openTaskModal(task) {
         </div>
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn-ghost modal-close">Cancel</button>
         <button type="submit" class="btn-primary">Save Task</button>
       </div>
     </form>`, (modal) => {
@@ -2908,7 +3053,6 @@ function openKaizenModal(kaizen) {
           <input type="date" name="approvedL2" class="form-input" value="${escHtml(kaizen ? kaizen.ApprovedL2 || '' : '')}"></div>
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn-ghost modal-close">Cancel</button>
         <button type="submit" class="btn-primary">Save Kaizen</button>
       </div>
     </form>`, (modal) => {
@@ -2987,7 +3131,6 @@ function openSRFModal(srfItem) {
         </div>
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn-ghost modal-close">Cancel</button>
         <button type="submit" class="btn-primary" style="background:var(--rose-500)">Save SRF Contract</button>
       </div>
     </form>`, (modal) => {
@@ -3033,8 +3176,8 @@ function setupViewEvents() {
   // Dashboard events
   vc.querySelector('#clear-dept-filter')?.addEventListener('click', () => { state.selectedDept = null; render(); });
   vc.querySelector('#clear-dept-filter2')?.addEventListener('click', () => { state.selectedDept = null; render(); });
-  vc.querySelector('#btn-convert-financial')?.addEventListener('click', () => { state.benefitsConverted = true; render(); });
-  vc.querySelector('#btn-show-mandays')?.addEventListener('click', () => { state.benefitsConverted = false; render(); });
+  vc.querySelector('#btn-convert-financial')?.addEventListener('click', () => { updateBenefitsUI(true); });
+  vc.querySelector('#btn-show-mandays')?.addEventListener('click', () => { updateBenefitsUI(false); });
 
   vc.querySelectorAll('.dept-item').forEach(el => {
     el.addEventListener('click', () => {
@@ -3051,13 +3194,28 @@ function setupViewEvents() {
   // Projects page events
   const projSearch = vc.querySelector('#proj-search');
   if (projSearch) {
-    projSearch.addEventListener('input', (e) => { state.projectSearch = e.target.value; render(); });
+    projSearch.addEventListener('input', (e) => {
+      state.projectSearch = e.target.value;
+      const grid = vc.querySelector('.projects-grid');
+      if (grid) {
+        grid.innerHTML = getProjectCardsHTML();
+        grid.querySelectorAll('.project-card').forEach(el => {
+          el.addEventListener('click', () => navigateTo('workspace', el.dataset.projId));
+        });
+      }
+    });
     projSearch.focus();
   }
   vc.querySelector('#proj-dept-filter')?.addEventListener('change', (e) => { state.projectDeptFilter = e.target.value; render(); });
   vc.querySelector('#proj-status-filter')?.addEventListener('change', (e) => { state.projectStatusFilter = e.target.value; render(); });
   vc.querySelector('#proj-sort')?.addEventListener('change', (e) => { state.projectSortBy = e.target.value; render(); });
-  vc.querySelector('#add-project-btn')?.addEventListener('click', openAddProjectModal);
+  vc.querySelector('#clear-filters-btn')?.addEventListener('click', () => {
+    state.projectSearch = '';
+    state.projectDeptFilter = '';
+    state.projectStatusFilter = '';
+    state.projectSortBy = 'name';
+    render();
+  });
   vc.querySelectorAll('.project-card').forEach(el => {
     el.addEventListener('click', () => navigateTo('workspace', el.dataset.projId));
   });
@@ -3095,6 +3253,15 @@ function setupViewEvents() {
     chk.addEventListener('change', (e) => {
       const taskId = e.target.dataset.taskId;
       const isChecked = e.target.checked;
+      
+      if (!isChecked) {
+        const confirmClear = window.confirm("Are you sure you want to remove the start date? This will clear start and end dates for this task and all its subtasks.");
+        if (!confirmClear) {
+          e.target.checked = true;
+          return;
+        }
+      }
+
       let newTasks = state.tasks.map(t => {
         if (t.ProjectID === state.activeProjectId && (t.ID === taskId || t.ID.startsWith(taskId + '.'))) {
           const updated = { ...t };
@@ -3120,6 +3287,15 @@ function setupViewEvents() {
     chk.addEventListener('change', (e) => {
       const taskId = e.target.dataset.taskId;
       const isChecked = e.target.checked;
+      
+      if (!isChecked) {
+        const confirmClear = window.confirm("Are you sure you want to remove the completion date? This will reset the completion status for this task and all its subtasks.");
+        if (!confirmClear) {
+          e.target.checked = true;
+          return;
+        }
+      }
+
       let newTasks = state.tasks.map(t => {
         if (t.ProjectID === state.activeProjectId && (t.ID === taskId || t.ID.startsWith(taskId + '.'))) {
           const updated = { ...t };
@@ -3137,6 +3313,21 @@ function setupViewEvents() {
       state.tasks = newTasks;
       state.projects = updatedProjects;
       saveStateToServer(state.projects, state.tasks, state.teamMembers, state.srfs);
+      render();
+    });
+  });
+
+  vc.querySelectorAll('.task-collapse-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const taskId = btn.dataset.taskId;
+      if (!state.collapsedTasks) state.collapsedTasks = [];
+      const idx = state.collapsedTasks.indexOf(taskId);
+      if (idx > -1) {
+        state.collapsedTasks.splice(idx, 1);
+      } else {
+        state.collapsedTasks.push(taskId);
+      }
       render();
     });
   });
