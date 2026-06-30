@@ -3167,30 +3167,43 @@ html.light .description-card {
   align-items: flex-start;
   padding: 24px 0 12px;
   overflow-x: auto;
-  gap: 16px;
+  gap: 0 !important;
   scrollbar-width: thin;
 }
 
-.srf-pipeline-line {
+.srf-node-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+
+.srf-step-line-left,
+.srf-step-line-right {
   position: absolute;
-  top: 40px;
-  left: 0;
-  right: 0;
+  top: 18px;
   height: 4px;
   background: var(--slate-850);
   z-index: 1;
-  border-radius: 2px;
+  transition: background var(--t-fast);
 }
 
-.srf-pipeline-progress-line {
-  position: absolute;
-  top: 40px;
+.srf-step-line-left {
   left: 0;
-  height: 4px;
+  right: 50%;
+  margin-right: 18px;
+}
+
+.srf-step-line-right {
+  left: 50%;
+  right: 0;
+  margin-left: 18px;
+}
+
+.srf-step-line-left.active,
+.srf-step-line-right.active {
   background: var(--emerald-500);
-  z-index: 2;
-  border-radius: 2px;
-  transition: width 0.4s ease;
 }
 
 .srf-pipeline-step {
@@ -3562,4 +3575,37 @@ html.light .kaizen-pipeline-line {
 }
 .pulse-effect {
   animation: cardPulse 0.4s ease-out;
+}
+
+.dept-bar-hover:hover .dept-bar-tooltip {
+  opacity: 1 !important;
+}
+.dept-bar-hover:hover {
+  filter: brightness(1.15);
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.05);
+}
+
+.hide-scrollbar {
+  overflow-x: auto;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.srf-list-row {
+  padding: 12px;
+  background: rgba(28, 6, 23, 0.4);
+  border: 1px solid var(--slate-850);
+  border-radius: var(--r-xl);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  transition: all var(--t-fast);
+}
+html.light .srf-list-row {
+  background: #ffffff;
+  border: 1px solid #e8ebf2;
 }

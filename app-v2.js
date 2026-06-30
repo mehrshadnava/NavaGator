@@ -197,7 +197,7 @@ function propagateSchedule(projectId) {
         if (!p.PlannedStartDate || !p.PlannedEndDate) return;
         const pStart = new Date(p.PlannedStartDate).getTime();
         const pEnd = new Date(p.PlannedEndDate).getTime();
-        
+
         const tStart = t.PlannedStartDate ? new Date(t.PlannedStartDate).getTime() : pStart;
         const tEnd = t.PlannedEndDate ? new Date(t.PlannedEndDate).getTime() : pEnd;
         const tDur = Math.max(86400000, tEnd - tStart);
@@ -260,7 +260,7 @@ function calculateCriticalPath(projectId) {
   const adj = {};
   const revAdj = {};
   const inDegree = {};
-  
+
   leafTasks.forEach(t => {
     adj[t.ID] = [];
     revAdj[t.ID] = [];
@@ -298,7 +298,7 @@ function calculateCriticalPath(projectId) {
   }
 
   const sortedLeafIds = order.length === leafTasks.length ? order : leafTasks.map(t => t.ID);
-  
+
   sortedLeafIds.forEach(taskId => {
     const t = leafTasks.find(x => x.ID === taskId);
     const tStart = t.PlannedStartDate ? new Date(t.PlannedStartDate).getTime() : projectStart;
@@ -796,21 +796,32 @@ function performProjectRollups(projId, currentTasks, currentProjects, currentSrf
 
   const updatedProjects = currentProjects.map(p => {
     if (p.ID !== projId) return p;
-    const rootTasks = projTasks.filter(t => !String(t.ID).includes('.'));
-    const targetTasks = rootTasks.length > 0 ? rootTasks : projTasks;
+
+    // Rule 1: Identify Leaf Tasks
+    const leafTasks = projTasks.filter(t => isLeaf(t.ID));
+
+    // Rule 4: Project Progress = (Sum of Progress of all Leaf Tasks) / (Number of Leaf Tasks)
     let calculatedProgress = p.Progress;
-    if (targetTasks.length > 0) {
-      calculatedProgress = Math.round(targetTasks.reduce((s, t) => s + (t.Progress || 0), 0) / targetTasks.length);
+    if (leafTasks.length > 0) {
+      calculatedProgress = Math.round(leafTasks.reduce((s, t) => s + (t.Progress || 0), 0) / leafTasks.length);
+    } else if (projTasks.length > 0) {
+      calculatedProgress = 0;
     }
+
     const plannedEnd = p.PlannedEndDate ? new Date(p.PlannedEndDate) : null;
     let projectDelayDays = 0;
     if (!p.ActualEndDate && plannedEnd && today > plannedEnd && calculatedProgress < 100) {
       projectDelayDays = Math.max(0, Math.round((today - plannedEnd) / 86400000));
     }
+
+    const rootTasks = projTasks.filter(t => !String(t.ID).includes('.'));
+    const targetTasks = rootTasks.length > 0 ? rootTasks : projTasks;
     const maxTaskDelay = targetTasks.reduce((max, t) => Math.max(max, t.DaysDelayed || 0), 0);
     const finalDelayDays = Math.max(projectDelayDays, maxTaskDelay);
+
     let status = p.Status;
-    const allTasksCompleted = projTasks.length > 0 && projTasks.every(t => !!t.ActualEndDate);
+    // Project is complete if all leaf tasks are complete
+    const allTasksCompleted = leafTasks.length > 0 && leafTasks.every(t => !!t.ActualEndDate);
     if (allTasksCompleted || (projTasks.length === 0 && p.ActualEndDate)) {
       status = 'completed';
     } else {
@@ -1003,11 +1014,25 @@ function updateNav() {
     header.textContent = titles[state.currentView] || '';
   }
 
-  // Show/hide create project btn
+  // Show/hide create project btn & department filter dropdown
   const createBtn = document.getElementById('create-project-btn');
+  const deptSelect = document.getElementById('header-dept-filter');
+  const show = state.projects.length > 0 && state.currentView !== 'workspace';
+  
   if (createBtn) {
-    const show = state.projects.length > 0 && state.currentView !== 'workspace';
     createBtn.style.display = show ? 'inline-flex' : 'none';
+  }
+  
+  if (deptSelect) {
+    deptSelect.style.display = show ? 'inline-block' : 'none';
+    if (show) {
+      const departments = [...new Set(state.projects.map(p => p.Department).filter(Boolean))].sort();
+      let options = '<option value="">All Departments</option>';
+      departments.forEach(d => {
+        options += `<option value="${escHtml(d)}" ${state.selectedDept === d ? 'selected' : ''}>${escHtml(d)}</option>`;
+      });
+      deptSelect.innerHTML = options;
+    }
   }
 }
 
@@ -1077,8 +1102,68 @@ function renderDashboard(container) {
   });
   const deptList = Object.keys(deptCounts).sort((a, b) => deptCounts[b] - deptCounts[a]);
 
+  const maxCount = Math.max(...Object.values(deptCounts), 1);
+  
+  // Y-axis gridlines & ticks
+  const yTicks = [maxCount, Math.round(maxCount * 0.75), Math.round(maxCount * 0.5), Math.round(maxCount * 0.25), 0];
+  const yAxisHTML = yTicks.map(val => `<div style="display:flex;align-items:center;height:0;position:relative;width:100%">
+    <span style="position:absolute;right:100%;margin-right:8px;font-size:9px;color:var(--text-dim);font-weight:700">${val}</span>
+    <div style="flex-grow:1;border-top:1px dashed rgba(255,255,255,0.06);width:100%"></div>
+  </div>`).join('');
+
+  // Vertical Bars
+  const deptChartHTML = deptList.map(dept => {
+    const count = deptCounts[dept];
+    const pct = Math.round((count / maxCount) * 100);
+    const isActive = state.selectedDept === dept;
+    const barBg = isActive ? '#ec4899' : '#6366f1';
+    const shadow = isActive ? '0 4px 12px rgba(236, 72, 153, 0.4)' : '0 2px 8px rgba(99, 102, 241, 0.15)';
+    const border = isActive ? '1px solid #f472b6' : '1px solid #818cf8';
+    
+    return `<div class="dept-vertical-bar-col" data-dept="${escHtml(dept)}" style="display:flex;flex-direction:column;align-items:center;flex:1;cursor:pointer;height:100%;justify-content:end;min-width:40px">
+      <div style="width:20px;height:${pct}%;background:${barBg};border:${border};border-bottom:none;border-radius:4px 4px 0 0;position:relative;transition:all 0.3s ease;display:flex;align-items:start;justify-content:center;box-shadow:${shadow}" class="dept-bar-hover">
+        <span class="dept-bar-tooltip" style="position:absolute;bottom:100%;background:var(--slate-950);border:1px solid var(--slate-850);padding:2px 6px;border-radius:4px;font-size:9px;color:white;font-weight:700;margin-bottom:4px;opacity:0;transition:opacity 0.2s;white-space:nowrap;pointer-events:none;z-index:10">${count} proj</span>
+      </div>
+    </div>`;
+  }).join('');
+
+  // X-Axis Labels Row HTML (Perfect Center Alignment - Vertical)
+  const deptChartLabelsHTML = deptList.map(dept => {
+    const isActive = state.selectedDept === dept;
+    return `<div class="dept-vertical-bar-col" data-dept="${escHtml(dept)}" style="display:flex;flex-direction:column;align-items:center;flex:1;cursor:pointer;min-width:40px;height:100%;position:relative">
+      <div style="font-size:9px;color:${isActive ? 'white' : 'var(--text-dim)'};font-weight:700;margin-top:8px;text-transform:capitalize;white-space:nowrap;transform:rotate(90deg);transform-origin:left center;position:absolute;top:0;left:50%;margin-left:-4px" title="${escHtml(dept)}">${escHtml(dept)}</div>
+    </div>`;
+  }).join('');
+
   // Donut SVG
   const donutSVG = buildDonutSVG(sc, total);
+
+  // SRF Cost Overview computations
+  const srfFilteredProjects = state.selectedDept ? state.projects.filter(p => p.Department === state.selectedDept) : state.projects;
+  const srfFilteredProjIds = new Set(srfFilteredProjects.map(p => p.ID));
+  const srfFiltered = state.srfs.filter(s => srfFilteredProjIds.has(s.ProjectID));
+  const srfTotalCost = srfFiltered.reduce((s, sr) => s + (sr.Cost || 0), 0);
+
+  const srfRows = srfFiltered.map(s => {
+    const proj = state.projects.find(p => p.ID === s.ProjectID);
+    const projName = proj ? proj.Name : 'Unknown Project';
+    return `<div class="srf-list-row">
+      <div class="min-w-0 flex-1">
+        <div style="display:flex;align-items:center;gap:6px">
+          <span style="font-size:11px;font-weight:700;color:var(--brand-300);background:rgba(129,0,85,0.15);padding:2px 6px;border-radius:4px">${escHtml(s.SRFNo)}</span>
+          <span style="font-size:10px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px" title="${escHtml(projName)}">${escHtml(projName)}</span>
+        </div>
+        <div style="font-size:11px;color:var(--text-secondary);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(s.Developments)}">${escHtml(s.Developments || 'No developments scope logged.')}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:24px;flex-shrink:0">
+        <div style="font-size:11px;color:var(--text-dim);text-align:right">
+          <div><strong style="color:var(--text-secondary)">${s.MandaysFC || 0}</strong> Functional</div>
+          <div><strong style="color:var(--text-secondary)">${s.MandaysTC || 0}</strong> Technical</div>
+        </div>
+        <div style="font-size:12px;font-weight:700;color:var(--rose-400);min-width:90px;text-align:right">${escHtml(formatCurrency(s.Cost || 0))}</div>
+      </div>
+    </div>`;
+  }).join('') || `<div class="text-center py-12 text-dim" style="font-size:12px">No SRF contracts belong to this department filter.</div>`;
 
   // Benefits breakdown
   const benefitRows = dp.filter(p => p.Benefits).map(p => {
@@ -1115,15 +1200,12 @@ function renderDashboard(container) {
 
   // Project list rows
   const projRows = dp.map(p => {
-    const statusClass = p.Status === 'delayed' ? 'badge-delayed' : p.Status === 'at-risk' ? 'badge-at-risk' : p.Status === 'completed' ? 'badge-completed' : 'badge-on-track';
     const progressFill = p.Status === 'completed' ? 'var(--brand-500)' : p.Status === 'delayed' ? 'var(--amber-500)' : p.Status === 'at-risk' ? 'var(--rose-500)' : 'var(--emerald-500)';
     return `<div class="project-list-row" data-proj-id="${escHtml(p.ID)}">
       <div class="min-w-0 flex-1">
         <div class="proj-name" style="font-size:12px;font-weight:700;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:color 0.2s">${escHtml(p.Name)}</div>
         <div style="font-size:10px;color:var(--text-dim);margin-top:2px;text-transform:capitalize">PM: ${escHtml(p.ProjectManager || 'Unassigned')} • ${escHtml(p.Department)}</div>
       </div>
-      <div style="display:flex;align-items:center;gap:16px;flex-shrink:0">
-        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
       <div style="display:flex;align-items:center;gap:16px;flex-shrink:0">
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
           <span style="font-size:10px;color:var(--text-muted)">Progress: <span style="font-weight:700;color:white">${p.Progress || 0}%</span></span>
@@ -1220,17 +1302,39 @@ function renderDashboard(container) {
 
     <!-- Dept Filter + Project List Row -->
     <div class="grid grid-12">
-      <!-- Departments -->
+      <!-- Departments Chart -->
       <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between min-h-420 col-span-4" style="border:1px solid var(--slate-900)">
-        <div class="space-y-4">
+        <div class="space-y-4 flex-1 flex flex-col">
           <div style="display:flex;justify-content:space-between;align-items:center">
-            <h3 class="panel-title">${svgIcon('building-2')} Departments</h3>
-            ${state.selectedDept ? `<button id="clear-dept-filter2" style="font-size:12px;color:var(--brand-300);font-weight:700;background:none;border:none;cursor:pointer">Clear Filter</button>` : ''}
+            <h3 class="panel-title">${svgIcon('bar-chart-3')} Department Analytics</h3>
+            ${state.selectedDept ? `<button id="clear-dept-filter2" style="font-size:12px;color:var(--brand-300);font-weight:700;background:none;border:none;cursor:pointer">Clear</button>` : ''}
           </div>
-          <div style="display:flex;flex-direction:column;gap:8px;max-height:310px;overflow-y:auto;padding-right:4px">${deptItems}</div>
+          
+          <!-- Vertical Bar Chart Area -->
+          <div style="display:flex;flex-direction:column;flex:1;margin:20px auto 0;width:80%;height:260px;" class="hide-scrollbar">
+            <!-- Bars & Gridlines Container -->
+            <div style="display:flex;position:relative;height:150px;width:100%">
+              <!-- Y-Axis Solid Line -->
+              <div style="position:absolute;left:0;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.15);z-index:5">
+                <span style="position:absolute;bottom:100%;left:-20px;font-size:8px;color:var(--text-muted);font-weight:700;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em">Count</span>
+              </div>
+              <!-- Y-Axis Gridlines -->
+              <div style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;flex-direction:column;justify-content:space-between;pointer-events:none">
+                ${yAxisHTML}
+              </div>
+              <!-- Bars Flex Row -->
+              <div style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;justify-content:space-around;align-items:end;height:100%;padding:0 8px">
+                ${deptChartHTML}
+              </div>
+            </div>
+            <!-- X-Axis Labels Row -->
+            <div style="display:flex;justify-content:space-around;height:100px;padding:0 8px;margin-top:8px;border-top:1px solid rgba(255,255,255,0.15);position:relative">
+              ${deptChartLabelsHTML}
+            </div>
+          </div>
         </div>
         <div style="font-size:10px;color:var(--text-dim);text-align:center;margin-top:12px;padding-top:8px;border-top:1px solid var(--slate-900)">
-          Click department to filter active views &amp; projects
+          Click bars to filter active views &amp; projects
         </div>
       </div>
 
@@ -1245,6 +1349,45 @@ function renderDashboard(container) {
         </div>
         <div style="font-size:10px;color:var(--text-dim);text-align:center;margin-top:12px;padding-top:8px;border-top:1px solid var(--slate-900)">
           Click on any project card to open its workspace
+        </div>
+      </div>
+    </div>
+
+    <!-- SRF Cost Overview Row -->
+    <div class="grid grid-12">
+      <!-- SRF Total Cost Widget -->
+      <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between min-h-350 col-span-4" style="border:1px solid var(--slate-900); background: var(--slate-950);">
+        <div>
+          <h3 class="panel-title" style="margin-bottom: 20px; display: flex; align-items: center; gap: 8px;">
+            <span style="color: var(--rose-400); display: flex; align-items: center;">${svgIcon('credit-card', 'w-4 h-4')}</span> 
+            SRF Cost Summary
+          </h3>
+          
+          <!-- Highlighted Total Cost Circle (Solid Background) -->
+          <div style="width: 220px; height: 220px; border-radius: 50%; background: #120911; border: 2px solid #f43f5e; box-shadow: 0 4px 15px rgba(244, 63, 94, 0.15); display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 8px auto 0; text-align: center; padding: 20px;">
+            <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700;">Total SRF Investment</div>
+            <div style="font-size: 28px; font-weight: 800; color: white; margin-top: 8px; letter-spacing: -0.02em; display: flex; align-items: center; justify-content: center; gap: 4px;">
+              <span style="color: var(--rose-400); font-weight: 400; font-size: 20px;">₹</span>${escHtml(formatCurrency(srfTotalCost).replace('₹', '').replace('Rs.', '').trim())}
+            </div>
+          </div>
+        </div>
+        
+        <div style="font-size: 10px; color: var(--text-muted); text-align: center; margin-top: 16px; padding-top: 8px; border-top: 1px solid var(--slate-900)">
+          Sum of linked SRFs (filtered by department)
+        </div>
+      </div>
+
+      <!-- SRF List -->
+      <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between min-h-350 col-span-8" style="border:1px solid var(--slate-900)">
+        <div class="space-y-4 flex-1 flex flex-col">
+          <h3 class="panel-title">
+            ${svgIcon('file-spreadsheet')}
+            ${state.selectedDept ? `SRF Registry in <span style="color:var(--brand-300);text-transform:capitalize;margin-left:4px">${escHtml(state.selectedDept)}</span>` : 'All Linked SRF Registry'}
+          </h3>
+          <div style="display:flex;flex-direction:column;gap:8px;max-height:220px;overflow-y:auto;padding-right:4px">${srfRows}</div>
+        </div>
+        <div style="font-size:10px;color:var(--text-dim);text-align:center;margin-top:12px;padding-top:8px;border-top:1px solid var(--slate-900)">
+          Lists linked contract deliverables, cost, and manday profiles
         </div>
       </div>
     </div>
@@ -1326,7 +1469,7 @@ function updateBenefitsUI(converted) {
       </div>`;
     }).join('') || `<div class="text-center py-8 text-dim" style="font-size:12px">No project benefits logged yet for this filter.</div>`;
     breakdown.innerHTML = benefitRows;
-    
+
     breakdown.querySelectorAll('.benefit-row').forEach(el => {
       el.addEventListener('click', () => navigateTo('workspace', el.dataset.projId));
     });
@@ -1573,12 +1716,17 @@ function renderOverviewTab(project, projectTasks, projectSRFs) {
         </svg>
         <div class="donut-center">
           <span class="count">${project.Progress || 0}%</span>
-          <span style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600;margin-top:2px">${escHtml(project.Status)}</span>
         </div>
       </div>
-      <div style="width:100%;background:rgba(59,17,48,0.4);border:1px solid rgba(59,17,48,0.8);border-radius:var(--r-xl);padding:12px;display:flex;justify-content:space-between;font-size:12px">
-        <div><span style="color:var(--text-dim)">Tasks Total:</span> <span style="color:white;font-weight:700">${leafTasks.length}</span></div>
-        <div><span style="color:var(--text-dim)">Completed:</span> <span style="color:var(--emerald-400);font-weight:700">${leafTasks.filter(t => t.Status === 'completed').length}</span></div>
+      <div style="width:100%;background:rgba(59,17,48,0.4);border:1px solid rgba(59,17,48,0.8);border-radius:var(--r-xl);padding:12px;font-size:12px;text-align:left;display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;justify-content:space-between">
+          <span style="color:var(--text-dim)">Leaf Activity:</span>
+          <span style="color:white;font-weight:700">${leafTasks.length}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between">
+          <span style="color:var(--text-dim)">Completed Tasks:</span>
+          <span style="color:var(--emerald-400);font-weight:700">${leafTasks.filter(t => (t.Progress || 0) === 100).length}</span>
+        </div>
       </div>
     </div>
 
@@ -1660,11 +1808,6 @@ function renderOverviewTab(project, projectTasks, projectSRFs) {
           </div>
         </div>
       </div>
-      ${project.DaysDelayed > 0 && project.Status !== 'completed' ? `
-      <div class="info-box">
-        ${svgIcon('alert-triangle')}
-        <div><strong>Timeline Deviation Alert:</strong> This project is running <strong>${project.DaysDelayed} days</strong> behind schedule. Check critical bottlenecks in Gantt chart or Task Checklist.</div>
-      </div>` : ''}
     </div>
   </div>`;
 }
@@ -1690,7 +1833,7 @@ function buildTimeHeaderHtml(minDate, maxDate, scale, pxPerDay) {
       const isWeekend = current.getDay() === 0 || current.getDay() === 6;
       const weekendStyle = isWeekend ? 'background:rgba(244,63,94,0.05);' : '';
       bottomCells.push(`<div class="gantt-time-col-bottom" style="left:${left}px;width:${pxPerDay}px;justify-content:center;padding:0;${weekendStyle}">${dayNum}</div>`);
-      
+
       gridLines.push(`<div class="gantt-grid-line" style="left:${left}px;${isWeekend ? 'background:rgba(244,63,94,0.03);' : ''}"></div>`);
 
       const next = new Date(current);
@@ -1719,12 +1862,12 @@ function buildTimeHeaderHtml(minDate, maxDate, scale, pxPerDay) {
       const left = weekIndex * pxPerDay * 7;
       const label = current.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
       bottomCells.push(`<div class="gantt-time-col-bottom" style="left:${left}px;width:${pxPerDay * 7}px;">${label}</div>`);
-      
+
       gridLines.push(`<div class="gantt-grid-line" style="left:${left}px;"></div>`);
 
       const next = new Date(current);
       next.setDate(next.getDate() + 7);
-      
+
       if (next.getMonth() !== currentMonth || next.getFullYear() !== currentYear || next > end) {
         const monthName = current.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
         const width = (weekIndex - monthStartIdx + 1) * pxPerDay * 7;
@@ -1759,7 +1902,7 @@ function buildTimeHeaderHtml(minDate, maxDate, scale, pxPerDay) {
       const width = daysInMonth * pxPerDay;
       const label = m.toLocaleDateString('en-US', { month: 'short' });
       bottomCells.push(`<div class="gantt-time-col-bottom" style="left:${cumulativeLeft}px;width:${width}px;">${label}</div>`);
-      
+
       gridLines.push(`<div class="gantt-grid-line" style="left:${cumulativeLeft}px;"></div>`);
 
       if (next.getFullYear() !== currentYear || idx === months.length - 1) {
@@ -1791,7 +1934,7 @@ function buildTimeHeaderHtml(minDate, maxDate, scale, pxPerDay) {
       const qNum = Math.floor(q.getMonth() / 3) + 1;
       const label = `Q${qNum}`;
       bottomCells.push(`<div class="gantt-time-col-bottom" style="left:${cumulativeLeft}px;width:${width}px;justify-content:center;padding:0;">${label}</div>`);
-      
+
       gridLines.push(`<div class="gantt-grid-line" style="left:${cumulativeLeft}px;"></div>`);
       cumulativeLeft += width;
     });
@@ -1838,8 +1981,8 @@ function renderGanttTab(project, projectTasks) {
   const allDates = projectTasks.flatMap(t => [t.PlannedStartDate, t.PlannedEndDate]).filter(Boolean).map(d => new Date(d));
   let minDate = allDates.length > 0 ? new Date(Math.min(...allDates)) : new Date();
   let maxDate = allDates.length > 0 ? new Date(Math.max(...allDates)) : new Date();
-  minDate.setHours(0,0,0,0);
-  maxDate.setHours(23,59,59,999);
+  minDate.setHours(0, 0, 0, 0);
+  maxDate.setHours(23, 59, 59, 999);
 
   let paddingDays = 14;
   if (state.ganttScale === 'day') paddingDays = 7;
@@ -1874,7 +2017,7 @@ function renderGanttTab(project, projectTasks) {
   const headers = buildTimeHeaderHtml(minDate, maxDate, state.ganttScale, pxPerDay);
 
   const today = new Date();
-  today.setHours(0,0,0,0);
+  today.setHours(0, 0, 0, 0);
   const todayPx = (today - minDate) / 86400000 * pxPerDay;
   const showTodayLine = todayPx >= 0 && todayPx <= chartWidth;
 
@@ -1962,7 +2105,7 @@ function initGanttViewEvents() {
 
   const project = state.projects.find(p => p.ID === state.activeProjectId);
   if (!project) return;
-  
+
   const projectTasks = state.tasks.filter(t => t.ProjectID === project.ID).sort((a, b) => compareTaskIds(a.ID, b.ID));
   if (projectTasks.length === 0) return;
 
@@ -1974,8 +2117,8 @@ function initGanttViewEvents() {
 
   const allDates = projectTasks.flatMap(t => [t.PlannedStartDate, t.PlannedEndDate]).filter(Boolean).map(d => new Date(d));
   let minDate = allDates.length > 0 ? new Date(Math.min(...allDates)) : new Date();
-  minDate.setHours(0,0,0,0);
-  
+  minDate.setHours(0, 0, 0, 0);
+
   let paddingDays = 14;
   if (state.ganttScale === 'day') paddingDays = 7;
   else if (state.ganttScale === 'week') paddingDays = 28;
@@ -2162,7 +2305,7 @@ function initGanttViewEvents() {
 
             const yA = predIdx * rowHeight + 20;
             const yB = i * rowHeight + 20;
-            
+
             let xA = 0;
             let xB = 0;
             let pathD = '';
@@ -2387,7 +2530,7 @@ function renderTasksTab(project, projectTasks) {
           <div class="checklist-meta">
             <span class="checklist-meta-item">${svgIcon('user')} ${escHtml(t.Assignee || 'Unassigned')}</span>
             <span class="checklist-meta-item">${svgIcon('calendar')} ${formatDate(t.PlannedStartDate)} – ${formatDate(t.PlannedEndDate)}</span>
-            ${t.DaysDelayed > 0 ? `<span class="checklist-meta-item" style="color:var(--rose-400)">${svgIcon('alert-triangle')} ${t.DaysDelayed}d ongoing</span>` : ''}
+            ${t.DaysDelayed > 0 && !t.ActualEndDate ? `<span class="checklist-meta-item" style="color:var(--rose-400)">${svgIcon('alert-triangle')} ${t.DaysDelayed}d ongoing</span>` : ''}
           </div>
         </div>
       </div>
@@ -2482,11 +2625,17 @@ function renderSRFTab(project, projectSRFs) {
     const dateVal = srfItem[step.key];
     const isDone = !!dateVal;
     const isCurrent = (si === completedIndex + 1) || (completedIndex === -1 && si === 0);
+    const nextIsDone = si < SRF_STEPS.length - 1 ? !!srfItem[SRF_STEPS[si + 1].key] : false;
+
     return `<div class="srf-pipeline-step ${isDone ? 'done' : ''} ${isCurrent ? 'current' : ''}">
-      <label class="srf-pipeline-node">
-        <input type="checkbox" ${isDone ? 'checked' : ''} class="srf-step-check srf-pipeline-checkbox" data-step-index="${si}" data-srf-no="${escHtml(srfItem.SRFNo)}">
-        <span class="srf-node-inner">${isDone ? svgIcon('check', 'w-4 h-4') : (si + 1)}</span>
-      </label>
+      <div class="srf-node-row">
+        ${si > 0 ? `<div class="srf-step-line-left ${isDone ? 'active' : ''}"></div>` : ''}
+        <label class="srf-pipeline-node">
+          <input type="checkbox" ${isDone ? 'checked' : ''} class="srf-step-check srf-pipeline-checkbox" data-step-index="${si}" data-srf-no="${escHtml(srfItem.SRFNo)}">
+          <span class="srf-node-inner">${isDone ? svgIcon('check', 'w-4 h-4') : (si + 1)}</span>
+        </label>
+        ${si < SRF_STEPS.length - 1 ? `<div class="srf-step-line-right ${nextIsDone ? 'active' : ''}"></div>` : ''}
+      </div>
       <div class="srf-pipeline-content">
         <div class="srf-pipeline-label">${escHtml(step.label)}</div>
         ${isDone ? `<div class="srf-pipeline-date">${formatDate(dateVal)}</div>` : ''}
@@ -2518,10 +2667,8 @@ function renderSRFTab(project, projectSRFs) {
     </div>
 
     <div class="space-y-3" style="overflow-x:auto">
-      <h4 style="font-size:12px;font-weight:700;color:white;display:flex;align-items:center;gap:8px;margin-bottom:12px">${svgIcon('clock', 'w-4 h-4')} Procurement Pipeline Steps (Sequential Stepper)</h4>
-      <div class="srf-pipeline-container">
-        <div class="srf-pipeline-line"></div>
-        <div class="srf-pipeline-progress-line" style="width: ${progressPct}%"></div>
+      <h4 style="font-size:12px;font-weight:700;color:white;display:flex;align-items:center;gap:8px;margin-bottom:12px">${svgIcon('clock', 'w-4 h-4')} SRF Tracker (Sequential Stepper)</h4>
+      <div class="srf-pipeline-container" style="gap: 0">
         ${stepNodes}
       </div>
     </div>
@@ -2739,7 +2886,7 @@ function openAddProjectModal() {
   const oneMonthLater = new Date();
   oneMonthLater.setMonth(oneMonthLater.getMonth() + 1);
   const oneMonthLaterStr = oneMonthLater.toISOString().split('T')[0];
-  
+
   const departments = [...new Set(state.projects.map(p => p.Department).filter(Boolean))];
   const deptOptions = departments.map(d => `<option value="${escHtml(d)}"></option>`).join('');
 
@@ -2871,6 +3018,11 @@ function openEditTaskModal(taskId) {
 
 function openTaskModal(task) {
   const isEditing = !!task;
+  const projectTasks = state.tasks.filter(t => t.ProjectID === state.activeProjectId);
+  const topLevelIds = projectTasks.map(t => t.ID).filter(id => !id.includes('.')).map(Number).filter(n => !isNaN(n));
+  const nextId = topLevelIds.length > 0 ? Math.max(...topLevelIds) + 1 : 1;
+  const defaultTaskId = isEditing ? task.ID : String(nextId);
+
   const pmOptions = state.teamMembers.map(m => `<option value="${escHtml(m.name)}" ${task && task.Assignee === m.name ? 'selected' : (!task && m === state.teamMembers[0]) ? 'selected' : ''}>${escHtml(m.name)}</option>`).join('');
   const reporterOptions = `<option value="">Select reporter</option>${state.teamMembers.map(m => `<option value="${escHtml(m.name)}" ${task && task.DelayReportedBy === m.name ? 'selected' : ''}>${escHtml(m.name)}</option>`).join('')}`;
 
@@ -2882,7 +3034,7 @@ function openTaskModal(task) {
     <form id="task-form" class="space-y-4" style="font-size:12px">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
         <div class="form-group"><label class="form-label">Task ID * (e.g. 1, 1.1, 1.1.1)</label>
-          <input type="text" name="taskId" required class="form-input" placeholder="e.g. 1.2" value="${escHtml(task ? task.ID : '')}"></div>
+          <input type="text" name="taskId" required class="form-input" placeholder="e.g. 1.2" value="${escHtml(defaultTaskId)}"></div>
         <div class="form-group"><label class="form-label">Assignee *</label>
           <select name="assignee" class="form-input">${pmOptions}</select></div>
         <div class="form-group" style="grid-column:1/-1"><label class="form-label">Activity Name *</label>
@@ -2934,6 +3086,12 @@ function openTaskModal(task) {
         if (parentTask) {
           parentStart = parentTask.PlannedStartDate || parentStart;
           parentEnd = parentTask.PlannedEndDate || parentEnd;
+
+          // Auto-assign parent's assignee if adding new task
+          if (!isEditing && parentTask.Assignee) {
+            const assigneeSelect = modal.querySelector('select[name="assignee"]');
+            if (assigneeSelect) assigneeSelect.value = parentTask.Assignee;
+          }
         }
       }
 
@@ -3179,7 +3337,7 @@ function setupViewEvents() {
   vc.querySelector('#btn-convert-financial')?.addEventListener('click', () => { updateBenefitsUI(true); });
   vc.querySelector('#btn-show-mandays')?.addEventListener('click', () => { updateBenefitsUI(false); });
 
-  vc.querySelectorAll('.dept-item').forEach(el => {
+  vc.querySelectorAll('.dept-vertical-bar-col, .dept-chart-bar-row, .dept-item').forEach(el => {
     el.addEventListener('click', () => {
       const dept = el.dataset.dept;
       state.selectedDept = state.selectedDept === dept ? null : dept;
@@ -3253,7 +3411,7 @@ function setupViewEvents() {
     chk.addEventListener('change', (e) => {
       const taskId = e.target.dataset.taskId;
       const isChecked = e.target.checked;
-      
+
       if (!isChecked) {
         const confirmClear = window.confirm("Are you sure you want to remove the start date? This will clear start and end dates for this task and all its subtasks.");
         if (!confirmClear) {
@@ -3270,6 +3428,8 @@ function setupViewEvents() {
           } else {
             updated.ActualStartDate = '';
             updated.ActualEndDate = '';
+            updated.Progress = 0;
+            updated.Status = 'not-started';
           }
           return updated;
         }
@@ -3287,7 +3447,7 @@ function setupViewEvents() {
     chk.addEventListener('change', (e) => {
       const taskId = e.target.dataset.taskId;
       const isChecked = e.target.checked;
-      
+
       if (!isChecked) {
         const confirmClear = window.confirm("Are you sure you want to remove the completion date? This will reset the completion status for this task and all its subtasks.");
         if (!confirmClear) {
@@ -3304,6 +3464,10 @@ function setupViewEvents() {
             updated.ActualStartDate = t.ActualStartDate || todayStr;
           } else {
             updated.ActualEndDate = '';
+            updated.Status = 'in-progress';
+            if (updated.Progress === 100) {
+              updated.Progress = 50;
+            }
           }
           return updated;
         }
@@ -3480,6 +3644,12 @@ function setupStaticEvents() {
   document.getElementById('theme-btn')?.addEventListener('click', () => {
     state.theme = state.theme === 'dark' ? 'light' : 'dark';
     applyTheme();
+  });
+
+  // Department filter (in header)
+  document.getElementById('header-dept-filter')?.addEventListener('change', (e) => {
+    state.selectedDept = e.target.value || null;
+    render();
   });
 
   // Import button
