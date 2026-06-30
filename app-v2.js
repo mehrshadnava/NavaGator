@@ -27,6 +27,8 @@ const state = {
   // Workspace
   workspaceTab: 'overview',
   ganttScale: 'week',
+  editTimelineMode: false,
+  showCriticalPath: false,
   taskAssigneeFilter: '',
   selectedSRFIndex: 0,
   editingTask: null,
@@ -97,6 +99,302 @@ function escHtml(str) {
 
 function svgIcon(name, cls = '') {
   return `<i data-lucide="${name}"${cls ? ` class="${cls}"` : ''}></i>`;
+}
+
+/* ============================================================
+   2.5 SCHEDULING & CPM ENGINE
+   ============================================================ */
+function parseDependencies(depStr) {
+  if (!depStr) return [];
+  return String(depStr).split(/[\s,;]+/).filter(Boolean).map(part => {
+    const match = part.match(/^([0-9.]+)(?::?(FS|SS|FF|SF))?$/i);
+    if (match) {
+      return {
+        predecessorId: match[1],
+        type: (match[2] || 'FS').toUpperCase()
+      };
+    }
+    return null;
+  }).filter(Boolean);
+}
+
+function wouldCreateCycle(projectId, taskId, predecessorId) {
+  if (taskId === predecessorId) return true;
+  const projectTasks = state.tasks.filter(t => t.ProjectID === projectId);
+  const visited = new Set();
+  const queue = [predecessorId];
+  while (queue.length > 0) {
+    const currentId = queue.shift();
+    if (currentId === taskId) return true;
+    if (visited.has(currentId)) continue;
+    visited.add(currentId);
+    const task = projectTasks.find(t => t.ID === currentId);
+    if (task && task.Dependencies) {
+      const deps = parseDependencies(task.Dependencies);
+      for (const d of deps) {
+        queue.push(d.predecessorId);
+      }
+    }
+  }
+  return false;
+}
+
+function propagateSchedule(projectId) {
+  const projectTasks = state.tasks.filter(t => t.ProjectID === projectId);
+  const taskIds = projectTasks.map(t => t.ID);
+  const isLeaf = (id) => !taskIds.some(otherId => otherId.startsWith(id + '.'));
+  const leafTasks = projectTasks.filter(t => isLeaf(t.ID));
+
+  const adj = {};
+  const inDegree = {};
+  leafTasks.forEach(t => {
+    adj[t.ID] = [];
+    inDegree[t.ID] = 0;
+  });
+
+  leafTasks.forEach(t => {
+    const deps = parseDependencies(t.Dependencies);
+    deps.forEach(d => {
+      const preds = leafTasks.filter(p => p.ID === d.predecessorId || p.ID.startsWith(d.predecessorId + '.'));
+      preds.forEach(p => {
+        if (adj[p.ID] && !adj[p.ID].includes(t.ID)) {
+          adj[p.ID].push({ to: t.ID, type: d.type });
+          inDegree[t.ID]++;
+        }
+      });
+    });
+  });
+
+  const queue = [];
+  leafTasks.forEach(t => {
+    if (inDegree[t.ID] === 0) queue.push(t.ID);
+  });
+
+  const order = [];
+  while (queue.length > 0) {
+    const u = queue.shift();
+    order.push(u);
+    const neighbors = adj[u] || [];
+    neighbors.forEach(edge => {
+      inDegree[edge.to]--;
+      if (inDegree[edge.to] === 0) queue.push(edge.to);
+    });
+  }
+
+  const tasksToProcess = order.length === leafTasks.length ? order : leafTasks.map(t => t.ID);
+
+  tasksToProcess.forEach(taskId => {
+    const t = projectTasks.find(x => x.ID === taskId);
+    if (!t) return;
+    const deps = parseDependencies(t.Dependencies);
+    if (deps.length === 0) return;
+
+    let maxReqStart = null;
+    deps.forEach(d => {
+      const preds = projectTasks.filter(p => p.ID === d.predecessorId || p.ID.startsWith(d.predecessorId + '.'));
+      preds.forEach(p => {
+        if (!p.PlannedStartDate || !p.PlannedEndDate) return;
+        const pStart = new Date(p.PlannedStartDate).getTime();
+        const pEnd = new Date(p.PlannedEndDate).getTime();
+        
+        const tStart = t.PlannedStartDate ? new Date(t.PlannedStartDate).getTime() : pStart;
+        const tEnd = t.PlannedEndDate ? new Date(t.PlannedEndDate).getTime() : pEnd;
+        const tDur = Math.max(86400000, tEnd - tStart);
+
+        let reqStart = null;
+        if (d.type === 'FS') reqStart = pEnd;
+        else if (d.type === 'SS') reqStart = pStart;
+        else if (d.type === 'FF') reqStart = pEnd - tDur;
+        else if (d.type === 'SF') reqStart = pStart - tDur;
+
+        if (reqStart !== null) {
+          if (maxReqStart === null || reqStart > maxReqStart) {
+            maxReqStart = reqStart;
+          }
+        }
+      });
+    });
+
+    if (maxReqStart !== null) {
+      const currentStart = t.PlannedStartDate ? new Date(t.PlannedStartDate).getTime() : 0;
+      if (maxReqStart > currentStart) {
+        const tStart = t.PlannedStartDate ? new Date(t.PlannedStartDate).getTime() : maxReqStart;
+        const tEnd = t.PlannedEndDate ? new Date(t.PlannedEndDate).getTime() : maxReqStart + 86400000;
+        const tDur = Math.max(86400000, tEnd - tStart);
+
+        t.PlannedStartDate = new Date(maxReqStart).toISOString().split('T')[0];
+        t.PlannedEndDate = new Date(maxReqStart + tDur).toISOString().split('T')[0];
+      }
+    }
+  });
+}
+
+function calculateCriticalPath(projectId) {
+  const projectTasks = state.tasks.filter(t => t.ProjectID === projectId);
+  if (projectTasks.length === 0) return { criticalTaskIds: new Set(), criticalLinks: [] };
+
+  const taskIds = projectTasks.map(t => t.ID);
+  const isLeaf = (id) => !taskIds.some(otherId => otherId.startsWith(id + '.'));
+  const leafTasks = projectTasks.filter(t => isLeaf(t.ID));
+
+  if (leafTasks.length === 0) return { criticalTaskIds: new Set(), criticalLinks: [] };
+
+  const durations = {};
+  const es = {};
+  const ef = {};
+  const ls = {};
+  const lf = {};
+
+  leafTasks.forEach(t => {
+    const start = t.PlannedStartDate ? new Date(t.PlannedStartDate).getTime() : 0;
+    const end = t.PlannedEndDate ? new Date(t.PlannedEndDate).getTime() : 0;
+    durations[t.ID] = Math.max(86400000, end - start);
+    es[t.ID] = 0;
+    ef[t.ID] = durations[t.ID];
+  });
+
+  const startTimes = leafTasks.map(t => t.PlannedStartDate ? new Date(t.PlannedStartDate).getTime() : 0).filter(Boolean);
+  const projectStart = startTimes.length > 0 ? Math.min(...startTimes) : 0;
+
+  const adj = {};
+  const revAdj = {};
+  const inDegree = {};
+  
+  leafTasks.forEach(t => {
+    adj[t.ID] = [];
+    revAdj[t.ID] = [];
+    inDegree[t.ID] = 0;
+  });
+
+  leafTasks.forEach(t => {
+    const deps = parseDependencies(t.Dependencies);
+    deps.forEach(d => {
+      const preds = leafTasks.filter(p => p.ID === d.predecessorId || p.ID.startsWith(d.predecessorId + '.'));
+      preds.forEach(p => {
+        if (adj[p.ID] && !adj[p.ID].includes(t.ID)) {
+          adj[p.ID].push({ to: t.ID, type: d.type });
+          revAdj[t.ID].push({ from: p.ID, type: d.type });
+          inDegree[t.ID]++;
+        }
+      });
+    });
+  });
+
+  const queue = [];
+  leafTasks.forEach(t => {
+    if (inDegree[t.ID] === 0) queue.push(t.ID);
+  });
+
+  const order = [];
+  while (queue.length > 0) {
+    const u = queue.shift();
+    order.push(u);
+    const neighbors = adj[u] || [];
+    neighbors.forEach(edge => {
+      inDegree[edge.to]--;
+      if (inDegree[edge.to] === 0) queue.push(edge.to);
+    });
+  }
+
+  const sortedLeafIds = order.length === leafTasks.length ? order : leafTasks.map(t => t.ID);
+  
+  sortedLeafIds.forEach(taskId => {
+    const t = leafTasks.find(x => x.ID === taskId);
+    const tStart = t.PlannedStartDate ? new Date(t.PlannedStartDate).getTime() : projectStart;
+    es[taskId] = tStart - projectStart;
+    ef[taskId] = es[taskId] + durations[taskId];
+  });
+
+  sortedLeafIds.forEach(taskId => {
+    const neighbors = adj[taskId] || [];
+    neighbors.forEach(edge => {
+      const u = taskId;
+      const v = edge.to;
+      const uES = es[u];
+      const uEF = ef[u];
+      const vDur = durations[v];
+
+      let reqES = es[v];
+      if (edge.type === 'FS') reqES = uEF;
+      else if (edge.type === 'SS') reqES = uES;
+      else if (edge.type === 'FF') reqES = uEF - vDur;
+      else if (edge.type === 'SF') reqES = uES - vDur;
+
+      if (reqES > es[v]) {
+        es[v] = reqES;
+        ef[v] = reqES + vDur;
+      }
+    });
+  });
+
+  let projectEndOffset = 0;
+  sortedLeafIds.forEach(taskId => {
+    if (ef[taskId] > projectEndOffset) {
+      projectEndOffset = ef[taskId];
+    }
+  });
+
+  sortedLeafIds.forEach(taskId => {
+    lf[taskId] = projectEndOffset;
+    ls[taskId] = lf[taskId] - durations[taskId];
+  });
+
+  const revOrder = [...sortedLeafIds].reverse();
+  revOrder.forEach(taskId => {
+    const predecessors = revAdj[taskId] || [];
+    predecessors.forEach(edge => {
+      const v = taskId;
+      const u = edge.from;
+      const vLS = ls[v];
+      const vLF = lf[v];
+      const uDur = durations[u];
+
+      let reqLF = lf[u];
+      if (edge.type === 'FS') reqLF = vLS;
+      else if (edge.type === 'SS') reqLF = vLS + uDur;
+      else if (edge.type === 'FF') reqLF = vLF;
+      else if (edge.type === 'SF') reqLF = vLF + uDur;
+
+      if (reqLF < lf[u]) {
+        lf[u] = reqLF;
+        ls[u] = reqLF - uDur;
+      }
+    });
+  });
+
+  const criticalTaskIds = new Set();
+  leafTasks.forEach(t => {
+    const slack = ls[t.ID] - es[t.ID];
+    if (Math.abs(slack) < 3600000 * 12) {
+      criticalTaskIds.add(t.ID);
+    }
+  });
+
+  projectTasks.forEach(t => {
+    if (!isLeaf(t.ID)) {
+      const childrenCritical = leafTasks.some(l => l.ID.startsWith(t.ID + '.') && criticalTaskIds.has(l.ID));
+      if (childrenCritical) {
+        criticalTaskIds.add(t.ID);
+      }
+    }
+  });
+
+  const criticalLinks = [];
+  leafTasks.forEach(t => {
+    if (criticalTaskIds.has(t.ID)) {
+      const deps = parseDependencies(t.Dependencies);
+      deps.forEach(d => {
+        const preds = leafTasks.filter(p => p.ID === d.predecessorId || p.ID.startsWith(d.predecessorId + '.'));
+        preds.forEach(p => {
+          if (criticalTaskIds.has(p.ID)) {
+            criticalLinks.push({ from: p.ID, to: t.ID, type: d.type });
+          }
+        });
+      });
+    }
+  });
+
+  return { criticalTaskIds, criticalLinks };
 }
 
 function getStatusBadgeClass(status) {
@@ -215,7 +513,8 @@ function parseExcelBuffer(buffer) {
     DaysDelayed: 0, // Recalculated at runtime
     DelayReason: String(getProp(row, ['Task Delay Reason', 'TaskDelayReason', 'DelayReason', 'Reason']) || ''),
     DelayImpact: String(getProp(row, ['Task Delay Impact', 'TaskDelayImpact', 'DelayImpact', 'Impact']) || ''),
-    DelayReportedBy: String(getProp(row, ['Task Delay Reported By', 'TaskDelayReportedBy', 'DelayReportedBy', 'ReportedBy']) || '')
+    DelayReportedBy: String(getProp(row, ['Task Delay Reported By', 'TaskDelayReportedBy', 'DelayReportedBy', 'ReportedBy']) || ''),
+    Dependencies: String(getProp(row, ['Task Predecessors', 'Predecessors', 'Task Dependencies', 'Dependencies', 'Predecessor']) || '')
   })).filter(t => t.ID && t.ProjectID);
 
   const teamMembers = membersRows.map(row => ({
@@ -342,31 +641,31 @@ async function exportExcelWorkbook(stateSnapshot) {
 
   // Projects sheet
   const wsP = wb.addWorksheet('Project Details');
-  const projCols = ['Project id','Project Name','Project Description','Project Planned Start Date','Project Planned End Date','Project Spent','Project Manager','Department','Project Actual Start Date','Project Actual End Date','Project Benefits'];
-  const projRows = stateSnapshot.projects.map(p => [p.ID,p.Name,p.Description,p.PlannedStartDate,p.PlannedEndDate,p.Spent,p.ProjectManager,p.Department,p.ActualStartDate,p.ActualEndDate,p.Benefits||'']);
-  styleWS(wsP, 'ProjectsTable', projCols, projRows, {'Project Spent':{type:'currency'},'Project Planned Start Date':{type:'date'},'Project Planned End Date':{type:'date'},'Project Actual Start Date':{type:'date'},'Project Actual End Date':{type:'date'}});
+  const projCols = ['Project id', 'Project Name', 'Project Description', 'Project Planned Start Date', 'Project Planned End Date', 'Project Spent', 'Project Manager', 'Department', 'Project Actual Start Date', 'Project Actual End Date', 'Project Benefits'];
+  const projRows = stateSnapshot.projects.map(p => [p.ID, p.Name, p.Description, p.PlannedStartDate, p.PlannedEndDate, p.Spent, p.ProjectManager, p.Department, p.ActualStartDate, p.ActualEndDate, p.Benefits || '']);
+  styleWS(wsP, 'ProjectsTable', projCols, projRows, { 'Project Spent': { type: 'currency' }, 'Project Planned Start Date': { type: 'date' }, 'Project Planned End Date': { type: 'date' }, 'Project Actual Start Date': { type: 'date' }, 'Project Actual End Date': { type: 'date' } });
 
   // Tasks sheet
   const wsT = wb.addWorksheet('Tasks');
-  const taskCols = ['Project id','Task Id','Task Name','Task Planned Start Date','Task Planned End Date','Task Actual Start Date','Task Actual End Date','Task Assignee','Task Delay Reason','Task Delay Impact','Task Delay Reported By'];
-  const taskRowsData = stateSnapshot.tasks.map(t => [t.ProjectID,t.ID,t.Name,t.PlannedStartDate,t.PlannedEndDate,t.ActualStartDate,t.ActualEndDate,t.Assignee||'',t.DelayReason||'',t.DelayImpact||'',t.DelayReportedBy||'']);
-  styleWS(wsT, 'TasksTable', taskCols, taskRowsData, {'Task Planned Start Date':{type:'date'},'Task Planned End Date':{type:'date'},'Task Actual Start Date':{type:'date'},'Task Actual End Date':{type:'date'}});
+  const taskCols = ['Project id', 'Task Id', 'Task Name', 'Task Planned Start Date', 'Task Planned End Date', 'Task Actual Start Date', 'Task Actual End Date', 'Task Assignee', 'Task Delay Reason', 'Task Delay Impact', 'Task Delay Reported By', 'Task Predecessors'];
+  const taskRowsData = stateSnapshot.tasks.map(t => [t.ProjectID, t.ID, t.Name, t.PlannedStartDate, t.PlannedEndDate, t.ActualStartDate, t.ActualEndDate, t.Assignee || '', t.DelayReason || '', t.DelayImpact || '', t.DelayReportedBy || '', t.Dependencies || '']);
+  styleWS(wsT, 'TasksTable', taskCols, taskRowsData, { 'Task Planned Start Date': { type: 'date' }, 'Task Planned End Date': { type: 'date' }, 'Task Actual Start Date': { type: 'date' }, 'Task Actual End Date': { type: 'date' } });
 
   // Members sheet
   const wsM = wb.addWorksheet('TeamMembers');
-  styleWS(wsM, 'MembersTable', ['id','name','role','department'], stateSnapshot.teamMembers.map(m => [m.id,m.name,m.role,m.department]));
+  styleWS(wsM, 'MembersTable', ['id', 'name', 'role', 'department'], stateSnapshot.teamMembers.map(m => [m.id, m.name, m.role, m.department]));
 
   // SRF sheet
   const wsSRF = wb.addWorksheet('SRF Summary');
-  const srfCols = ['Project id','SRF No','Developments','User','Mandays FC','Mandays TC','Total Mandays','Development Cost (INR)','Status','Uploaded On','Approved On','Received for CCB','Send for CCB','CCB Received On','CCB Attached in CRS On','FSD Received On','FSD Approved On','Received for UAT','Actual Testing & Approval','SRF Close'];
-  const srfData = stateSnapshot.srfs.map(s => [s.ProjectID,s.SRFNo,s.Developments,s.User,s.MandaysFC||0,s.MandaysTC||0,(s.MandaysFC||0)+(s.MandaysTC||0),s.Cost||0,s.Status||'Uploaded On',s.UploadedOn,s.ApprovedOn,s.ReceivedCCB,s.SendCCB,s.CCBReceived,s.CCBAttached,s.FSDReceived,s.FSDApproved,s.ReceivedUAT,s.ActualTestingApproval,s.SRFClose]);
-  styleWS(wsSRF, 'SRFTable', srfCols, srfData, {'Mandays FC':{type:'number'},'Mandays TC':{type:'number'},'Total Mandays':{type:'number'},'Development Cost (INR)':{type:'currency'},'Uploaded On':{type:'date'},'Approved On':{type:'date'},'Received for CCB':{type:'date'},'Send for CCB':{type:'date'},'CCB Received On':{type:'date'},'CCB Attached in CRS On':{type:'date'},'FSD Received On':{type:'date'},'FSD Approved On':{type:'date'},'Received for UAT':{type:'date'},'Actual Testing & Approval':{type:'date'},'SRF Close':{type:'date'}});
+  const srfCols = ['Project id', 'SRF No', 'Developments', 'User', 'Mandays FC', 'Mandays TC', 'Total Mandays', 'Development Cost (INR)', 'Status', 'Uploaded On', 'Approved On', 'Received for CCB', 'Send for CCB', 'CCB Received On', 'CCB Attached in CRS On', 'FSD Received On', 'FSD Approved On', 'Received for UAT', 'Actual Testing & Approval', 'SRF Close'];
+  const srfData = stateSnapshot.srfs.map(s => [s.ProjectID, s.SRFNo, s.Developments, s.User, s.MandaysFC || 0, s.MandaysTC || 0, (s.MandaysFC || 0) + (s.MandaysTC || 0), s.Cost || 0, s.Status || 'Uploaded On', s.UploadedOn, s.ApprovedOn, s.ReceivedCCB, s.SendCCB, s.CCBReceived, s.CCBAttached, s.FSDReceived, s.FSDApproved, s.ReceivedUAT, s.ActualTestingApproval, s.SRFClose]);
+  styleWS(wsSRF, 'SRFTable', srfCols, srfData, { 'Mandays FC': { type: 'number' }, 'Mandays TC': { type: 'number' }, 'Total Mandays': { type: 'number' }, 'Development Cost (INR)': { type: 'currency' }, 'Uploaded On': { type: 'date' }, 'Approved On': { type: 'date' }, 'Received for CCB': { type: 'date' }, 'Send for CCB': { type: 'date' }, 'CCB Received On': { type: 'date' }, 'CCB Attached in CRS On': { type: 'date' }, 'FSD Received On': { type: 'date' }, 'FSD Approved On': { type: 'date' }, 'Received for UAT': { type: 'date' }, 'Actual Testing & Approval': { type: 'date' }, 'SRF Close': { type: 'date' } });
 
   // Kaizen sheet
   const wsK = wb.addWorksheet('Kaizen');
-  const kaizenCols = ['Project id','Kaizen Id','Title','Uploaded On','Approved by L+1','Approved by L+2','Grade'];
-  const kaizenRowsData = (stateSnapshot.kaizens || []).map(k => [k.ProjectID,k.ID,k.Title,k.UploadedOn||'',k.ApprovedL1||'',k.ApprovedL2||'',k.Grade||'L1']);
-  styleWS(wsK, 'KaizenTable', kaizenCols, kaizenRowsData, {'Uploaded On':{type:'date'},'Approved by L+1':{type:'date'},'Approved by L+2':{type:'date'}});
+  const kaizenCols = ['Project id', 'Kaizen Id', 'Title', 'Uploaded On', 'Approved by L+1', 'Approved by L+2', 'Grade'];
+  const kaizenRowsData = (stateSnapshot.kaizens || []).map(k => [k.ProjectID, k.ID, k.Title, k.UploadedOn || '', k.ApprovedL1 || '', k.ApprovedL2 || '', k.Grade || 'L1']);
+  styleWS(wsK, 'KaizenTable', kaizenCols, kaizenRowsData, { 'Uploaded On': { type: 'date' }, 'Approved by L+1': { type: 'date' }, 'Approved by L+2': { type: 'date' } });
 
   return wb.xlsx.writeBuffer();
 }
@@ -378,7 +677,7 @@ function performProjectRollups(projId, currentTasks, currentProjects, currentSrf
   currentSrfs = currentSrfs || state.srfs;
   const projTasks = currentTasks.filter(t => t.ProjectID === projId);
 
-  const today = new Date(); today.setHours(0,0,0,0);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
   const todayStr = today.toISOString().split('T')[0];
 
   const taskIds = projTasks.map(t => t.ID);
@@ -452,6 +751,14 @@ function performProjectRollups(projId, currentTasks, currentProjects, currentSrf
       return false;
     });
     if (children.length > 0) {
+      const startDates = children.map(c => c.PlannedStartDate).filter(Boolean).map(d => new Date(d));
+      const endDates = children.map(c => c.PlannedEndDate).filter(Boolean).map(d => new Date(d));
+      if (startDates.length > 0) {
+        parent.PlannedStartDate = new Date(Math.min(...startDates)).toISOString().split('T')[0];
+      }
+      if (endDates.length > 0) {
+        parent.PlannedEndDate = new Date(Math.max(...endDates)).toISOString().split('T')[0];
+      }
       const totalProgress = children.reduce((s, c) => s + (c.Progress || 0), 0);
       parent.Progress = Math.round(totalProgress / children.length);
       if (parent.Progress === 100) {
@@ -477,11 +784,11 @@ function performProjectRollups(projId, currentTasks, currentProjects, currentSrf
           parent.ActualStartDate = '';
         }
       }
-      
+
       const maxChildDelay = children.reduce((max, c) => Math.max(max, c.DaysDelayed || 0), 0);
       parent.DaysDelayed = maxChildDelay;
       if (maxChildDelay > 0) parent.Status = 'delayed';
-      
+
       if (children.some(c => c.Status === 'blocked')) parent.Status = 'blocked';
     }
   });
@@ -584,7 +891,7 @@ async function initDatabase() {
         recalculateAll();
         state.currentView = state.projects.length > 0 ? 'dashboard' : 'empty';
         showToast('Loaded from local cache (offline mode)', 'info');
-      } catch {}
+      } catch { }
     } else {
       state.currentView = 'empty';
     }
@@ -717,11 +1024,11 @@ function render() {
 
   switch (state.currentView) {
     case 'dashboard': renderDashboard(container); break;
-    case 'projects':  renderProjects(container); break;
+    case 'projects': renderProjects(container); break;
     case 'workspace': renderWorkspace(container); break;
-    case 'team':      renderTeam(container); break;
+    case 'team': renderTeam(container); break;
     case 'empty':
-    default:          renderEmpty(container); break;
+    default: renderEmpty(container); break;
   }
 
   lucide.createIcons();
@@ -940,10 +1247,10 @@ function buildDonutSVG(sc, total) {
   }
   let offset = 0;
   const segments = [
-    { count: sc.completed,    color: '#810055' },
-    { count: sc['on-track'],  color: '#10b981' },
-    { count: sc.delayed,      color: '#f59e0b' },
-    { count: sc['at-risk'],   color: '#f43f5e' },
+    { count: sc.completed, color: '#810055' },
+    { count: sc['on-track'], color: '#10b981' },
+    { count: sc.delayed, color: '#f59e0b' },
+    { count: sc['at-risk'], color: '#f43f5e' },
   ];
   let paths = `<circle cx="18" cy="18" r="15.915" fill="none" stroke="#111827" stroke-width="3"/>`;
   segments.forEach(seg => {
@@ -1087,11 +1394,11 @@ function renderWorkspace(container) {
   const tabContent = (() => {
     switch (state.workspaceTab) {
       case 'overview': return renderOverviewTab(project, projectTasks, projectSRFs);
-      case 'gantt':    return renderGanttTab(project, projectTasks);
-      case 'tasks':    return renderTasksTab(project, projectTasks);
-      case 'srf':      return renderSRFTab(project, projectSRFs);
-      case 'kaizen':   return renderKaizenTab(project, projectKaizens);
-      default:         return '';
+      case 'gantt': return renderGanttTab(project, projectTasks);
+      case 'tasks': return renderTasksTab(project, projectTasks);
+      case 'srf': return renderSRFTab(project, projectSRFs);
+      case 'kaizen': return renderKaizenTab(project, projectKaizens);
+      default: return '';
     }
   })();
 
@@ -1126,12 +1433,12 @@ function renderWorkspace(container) {
     <!-- Tabs -->
     <div class="tab-bar">
       ${[
-        { id: 'overview', label: 'Overview', icon: 'bar-chart-3' },
-        { id: 'gantt', label: 'Gantt Chart', icon: 'calendar-days' },
-        { id: 'tasks', label: 'Task Checklist', icon: 'list-todo', badge: projectTasks.length },
-        { id: 'srf', label: 'SRF Procurement', icon: 'file-spreadsheet', badge: projectSRFs.length > 0 ? projectSRFs.length : null, badgeClass: 'srf' },
-        { id: 'kaizen', label: 'Kaizen Log', icon: 'award', badge: projectKaizens.length > 0 ? projectKaizens.length : null },
-      ].map(tab => `<button class="tab-btn ${state.workspaceTab === tab.id ? 'active' : ''}" data-tab="${tab.id}">
+      { id: 'overview', label: 'Overview', icon: 'bar-chart-3' },
+      { id: 'gantt', label: 'Gantt Chart', icon: 'calendar-days' },
+      { id: 'tasks', label: 'Task Checklist', icon: 'list-todo', badge: projectTasks.length },
+      { id: 'srf', label: 'SRF Procurement', icon: 'file-spreadsheet', badge: projectSRFs.length > 0 ? projectSRFs.length : null, badgeClass: 'srf' },
+      { id: 'kaizen', label: 'Kaizen Log', icon: 'award', badge: projectKaizens.length > 0 ? projectKaizens.length : null },
+    ].map(tab => `<button class="tab-btn ${state.workspaceTab === tab.id ? 'active' : ''}" data-tab="${tab.id}">
         ${svgIcon(tab.icon)} ${escHtml(tab.label)}
         ${tab.badge !== undefined && tab.badge !== null ? `<span class="tab-badge ${tab.badgeClass || ''}">${tab.badge}</span>` : ''}
       </button>`).join('')}
@@ -1257,6 +1564,159 @@ function renderOverviewTab(project, projectTasks, projectSRFs) {
   </div>`;
 }
 
+function buildTimeHeaderHtml(minDate, maxDate, scale, pxPerDay) {
+  const topCells = [];
+  const bottomCells = [];
+  const gridLines = [];
+
+  const start = new Date(minDate);
+  const end = new Date(maxDate);
+
+  if (scale === 'day') {
+    let current = new Date(start);
+    let dayIndex = 0;
+    let monthStartIdx = 0;
+    let currentMonth = current.getMonth();
+    let currentYear = current.getFullYear();
+
+    while (current <= end) {
+      const left = dayIndex * pxPerDay;
+      const dayNum = current.getDate();
+      const isWeekend = current.getDay() === 0 || current.getDay() === 6;
+      const weekendStyle = isWeekend ? 'background:rgba(244,63,94,0.05);' : '';
+      bottomCells.push(`<div class="gantt-time-col-bottom" style="left:${left}px;width:${pxPerDay}px;justify-content:center;padding:0;${weekendStyle}">${dayNum}</div>`);
+      
+      gridLines.push(`<div class="gantt-grid-line" style="left:${left}px;${isWeekend ? 'background:rgba(244,63,94,0.03);' : ''}"></div>`);
+
+      const next = new Date(current);
+      next.setDate(next.getDate() + 1);
+      if (next.getMonth() !== currentMonth || next.getFullYear() !== currentYear || next > end) {
+        const monthName = current.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+        const width = (dayIndex - monthStartIdx + 1) * pxPerDay;
+        const leftPos = monthStartIdx * pxPerDay;
+        topCells.push(`<div class="gantt-time-col-top" style="left:${leftPos}px;width:${width}px;">${monthName}</div>`);
+        monthStartIdx = dayIndex + 1;
+        currentMonth = next.getMonth();
+        currentYear = next.getFullYear();
+      }
+
+      current = next;
+      dayIndex++;
+    }
+  } else if (scale === 'week') {
+    let current = new Date(start);
+    let weekIndex = 0;
+    let monthStartIdx = 0;
+    let currentMonth = current.getMonth();
+    let currentYear = current.getFullYear();
+
+    while (current <= end) {
+      const left = weekIndex * pxPerDay * 7;
+      const label = current.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      bottomCells.push(`<div class="gantt-time-col-bottom" style="left:${left}px;width:${pxPerDay * 7}px;">${label}</div>`);
+      
+      gridLines.push(`<div class="gantt-grid-line" style="left:${left}px;"></div>`);
+
+      const next = new Date(current);
+      next.setDate(next.getDate() + 7);
+      
+      if (next.getMonth() !== currentMonth || next.getFullYear() !== currentYear || next > end) {
+        const monthName = current.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+        const width = (weekIndex - monthStartIdx + 1) * pxPerDay * 7;
+        const leftPos = monthStartIdx * pxPerDay * 7;
+        topCells.push(`<div class="gantt-time-col-top" style="left:${leftPos}px;width:${width}px;">${monthName}</div>`);
+        monthStartIdx = weekIndex + 1;
+        currentMonth = next.getMonth();
+        currentYear = next.getFullYear();
+      }
+
+      current = next;
+      weekIndex++;
+    }
+  } else if (scale === 'month') {
+    let current = new Date(start);
+    current.setDate(1);
+    let monthIndex = 0;
+    let yearStartIdx = 0;
+    let currentYear = current.getFullYear();
+
+    const months = [];
+    while (current <= end) {
+      months.push(new Date(current));
+      current.setMonth(current.getMonth() + 1);
+    }
+
+    let cumulativeLeft = 0;
+    months.forEach((m, idx) => {
+      const next = new Date(m);
+      next.setMonth(next.getMonth() + 1);
+      const daysInMonth = Math.round((next - m) / 86400000);
+      const width = daysInMonth * pxPerDay;
+      const label = m.toLocaleDateString('en-US', { month: 'short' });
+      bottomCells.push(`<div class="gantt-time-col-bottom" style="left:${cumulativeLeft}px;width:${width}px;">${label}</div>`);
+      
+      gridLines.push(`<div class="gantt-grid-line" style="left:${cumulativeLeft}px;"></div>`);
+
+      if (next.getFullYear() !== currentYear || idx === months.length - 1) {
+        const yearWidth = cumulativeLeft + width - yearStartIdx;
+        topCells.push(`<div class="gantt-time-col-top" style="left:${yearStartIdx}px;width:${yearWidth}px;">${currentYear}</div>`);
+        yearStartIdx = cumulativeLeft + width;
+        currentYear = next.getFullYear();
+      }
+
+      cumulativeLeft += width;
+    });
+  } else if (scale === 'quarter') {
+    let current = new Date(start);
+    current.setDate(1);
+    current.setMonth(Math.floor(current.getMonth() / 3) * 3);
+
+    const quarters = [];
+    while (current <= end) {
+      quarters.push(new Date(current));
+      current.setMonth(current.getMonth() + 3);
+    }
+
+    let cumulativeLeft = 0;
+    quarters.forEach((q, idx) => {
+      const next = new Date(q);
+      next.setMonth(next.getMonth() + 3);
+      const daysInQuarter = Math.round((next - q) / 86400000);
+      const width = daysInQuarter * pxPerDay;
+      const qNum = Math.floor(q.getMonth() / 3) + 1;
+      const label = `Q${qNum}`;
+      bottomCells.push(`<div class="gantt-time-col-bottom" style="left:${cumulativeLeft}px;width:${width}px;justify-content:center;padding:0;">${label}</div>`);
+      
+      gridLines.push(`<div class="gantt-grid-line" style="left:${cumulativeLeft}px;"></div>`);
+      cumulativeLeft += width;
+    });
+
+    let cumulativeLeftTop = 0;
+    let yearStartIdx = 0;
+    let currentYear = quarters[0].getFullYear();
+    quarters.forEach((q, idx) => {
+      const next = new Date(q);
+      next.setMonth(next.getMonth() + 3);
+      const daysInQuarter = Math.round((next - q) / 86400000);
+      const width = daysInQuarter * pxPerDay;
+
+      if (next.getFullYear() !== currentYear || idx === quarters.length - 1) {
+        const yearWidth = cumulativeLeftTop + width - yearStartIdx;
+        topCells.push(`<div class="gantt-time-col-top" style="left:${yearStartIdx}px;width:${yearWidth}px;">${currentYear}</div>`);
+        yearStartIdx = cumulativeLeftTop + width;
+        currentYear = next.getFullYear();
+      }
+      cumulativeLeftTop += width;
+    });
+  }
+
+  return {
+    topHtml: topCells.join(''),
+    bottomHtml: bottomCells.join(''),
+    gridLinesHtml: gridLines.join('')
+  };
+}
+
 function renderGanttTab(project, projectTasks) {
   if (projectTasks.length === 0) {
     return `<div class="glass-panel rounded-2xl p-5 animate-slide-up" style="text-align:center;padding:64px;color:var(--text-dim);font-size:13px">
@@ -1264,74 +1724,490 @@ function renderGanttTab(project, projectTasks) {
     </div>`;
   }
 
+  const todayStr = new Date().toISOString().split('T')[0];
+  projectTasks.forEach(t => {
+    if (!t.PlannedStartDate) t.PlannedStartDate = project.PlannedStartDate || todayStr;
+    if (!t.PlannedEndDate) t.PlannedEndDate = project.PlannedEndDate || todayStr;
+  });
+
   const allDates = projectTasks.flatMap(t => [t.PlannedStartDate, t.PlannedEndDate]).filter(Boolean).map(d => new Date(d));
   let minDate = allDates.length > 0 ? new Date(Math.min(...allDates)) : new Date();
   let maxDate = allDates.length > 0 ? new Date(Math.max(...allDates)) : new Date();
-  minDate.setDate(minDate.getDate() - 5);
-  maxDate.setDate(maxDate.getDate() + 5);
+  minDate.setHours(0,0,0,0);
+  maxDate.setHours(23,59,59,999);
+
+  let paddingDays = 14;
+  if (state.ganttScale === 'day') paddingDays = 7;
+  else if (state.ganttScale === 'week') paddingDays = 28;
+  else if (state.ganttScale === 'month') paddingDays = 90;
+  else if (state.ganttScale === 'quarter') paddingDays = 180;
+
+  minDate.setDate(minDate.getDate() - paddingDays);
+  maxDate.setDate(maxDate.getDate() + paddingDays);
+
+  if (state.ganttScale === 'week') {
+    minDate.setDate(minDate.getDate() - minDate.getDay());
+  } else if (state.ganttScale === 'month') {
+    minDate.setDate(1);
+  } else if (state.ganttScale === 'quarter') {
+    minDate.setDate(1);
+    minDate.setMonth(Math.floor(minDate.getMonth() / 3) * 3);
+  }
+
+  let pxPerDay = 8;
+  if (state.ganttScale === 'day') pxPerDay = 32;
+  else if (state.ganttScale === 'week') pxPerDay = 8;
+  else if (state.ganttScale === 'month') pxPerDay = 2.5;
+  else if (state.ganttScale === 'quarter') pxPerDay = 0.8;
+
   const totalDays = Math.max(1, Math.round((maxDate - minDate) / 86400000));
+  const chartWidth = totalDays * pxPerDay;
+  const totalTasks = projectTasks.length;
+  const rowHeight = 40;
+  const headerHeight = 44;
 
-  const scaleLabels = Array.from({ length: 6 }, (_, i) => {
-    if (state.ganttScale === 'day') return `Day ${Math.round((i / 5) * totalDays)}`;
-    if (state.ganttScale === 'week') return `Wk ${i * 2 + 1}`;
-    return `M${i + 1}`;
-  });
+  const headers = buildTimeHeaderHtml(minDate, maxDate, state.ganttScale, pxPerDay);
 
-  const taskLabels = projectTasks.map(t => {
-    const level = String(t.ID).split('.').length - 1;
-    return `<div class="gantt-task-label" style="padding-left:${16 + level * 12}px">
-      <span style="font-size:10px;color:var(--text-dim);margin-right:6px">${escHtml(t.ID)}</span>
-      <span style="color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(t.Name)}</span>
-    </div>`;
-  }).join('');
-
-  const timeHeader = scaleLabels.map((label, i) =>
-    `<div class="gantt-time-col" style="left:${(i/6)*100}%;width:${100/6}%">${label}</div>`
-  ).join('');
-
-  const taskBars = projectTasks.map(t => {
-    const start = t.PlannedStartDate ? new Date(t.PlannedStartDate) : minDate;
-    const end   = t.PlannedEndDate   ? new Date(t.PlannedEndDate)   : maxDate;
-    const daysFromMin = Math.max(0, Math.round((start - minDate) / 86400000));
-    const durDays = Math.max(1, Math.round((end - start) / 86400000));
-    const leftPct = Math.min(95, Math.max(1, (daysFromMin / totalDays) * 100));
-    const widPct  = Math.min(100 - leftPct, Math.max(4, (durDays / totalDays) * 100));
-    const level   = String(t.ID).split('.').length - 1;
-
-    let barBorder = 'var(--brand-500)', barBg = 'rgba(129,0,85,0.25)', fillBg = 'var(--brand-500)';
-    if (level === 0) { barBorder = '#6366f1'; barBg = 'rgba(99,102,241,0.2)'; fillBg = '#6366f1'; }
-    if (t.Status === 'delayed') { barBorder = 'var(--amber-500)'; barBg = 'rgba(245,158,11,0.2)'; fillBg = 'var(--amber-500)'; }
-    if (t.Status === 'blocked') { barBorder = 'var(--rose-500)'; barBg = 'rgba(244,63,94,0.2)'; fillBg = 'var(--rose-500)'; }
-    if (t.Status === 'completed') { barBorder = 'var(--emerald-500)'; barBg = 'rgba(16,185,129,0.2)'; fillBg = 'var(--emerald-500)'; }
-
-    return `<div class="gantt-bar-row">
-      <div class="gantt-bar" style="left:${leftPct}%;width:${widPct}%;background:${barBg};border-color:${barBorder}" title="${escHtml(t.Name)}: ${t.Progress}% (${formatDate(t.PlannedStartDate)} – ${formatDate(t.PlannedEndDate)})">
-        <div class="gantt-bar-fill" style="width:${t.Progress || 0}%;background:${fillBg}"></div>
-      </div>
-      <span class="gantt-bar-label" style="left:${leftPct + widPct + 1.5}%">${t.Progress}% • ${escHtml(t.Assignee)}</span>
-    </div>`;
-  }).join('');
+  const today = new Date();
+  today.setHours(0,0,0,0);
+  const todayPx = (today - minDate) / 86400000 * pxPerDay;
+  const showTodayLine = todayPx >= 0 && todayPx <= chartWidth;
 
   return `<div class="glass-panel rounded-2xl p-5 space-y-4 animate-slide-up" style="overflow:hidden">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-      <h3 class="panel-title">${svgIcon('calendar')} Timeline Chart</h3>
-      <div class="btn-group">
-        ${['day','week','month'].map(s => `<button class="btn-group-item ${state.ganttScale === s ? 'active' : ''}" data-gantt-scale="${s}">${s.charAt(0).toUpperCase() + s.slice(1)}s</button>`).join('')}
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+      <div style="display:flex;align-items:center;gap:8px">
+        <h3 class="panel-title">${svgIcon('calendar')} Project Schedule</h3>
+        <button class="btn-primary" id="gantt-edit-toggle" style="font-size:11px;padding:6px 12px;border-radius:6px;display:flex;align-items:center;gap:6px;background:${state.editTimelineMode ? 'var(--brand-500)' : 'var(--slate-800)'};border:1px solid var(--slate-700)">
+          ${svgIcon('edit-2', 'w-3 h-3')} <span>${state.editTimelineMode ? 'Edit Mode ON' : 'Edit Timeline'}</span>
+        </button>
+        <button class="btn-primary" id="gantt-cpm-toggle" style="font-size:11px;padding:6px 12px;border-radius:6px;display:flex;align-items:center;gap:6px;background:${state.showCriticalPath ? 'var(--rose-600)' : 'var(--slate-800)'};border:1px solid var(--slate-700)">
+          ${svgIcon('git-commit', 'w-3 h-3')} <span>CPM Path</span>
+        </button>
+      </div>
+      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+        <div class="gantt-legend" style="display:flex;align-items:center;gap:12px;font-size:9px;color:var(--text-muted);background:var(--slate-900);padding:6px 12px;border-radius:8px;border:1px solid var(--slate-800);">
+          <div style="display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:2px;background:rgba(99,102,241,0.2);border:1px solid #6366f1;display:inline-block"></span><span>Summary</span></div>
+          <div style="display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:2px;background:rgba(129,0,85,0.15);border:1px solid var(--brand-500);display:inline-block"></span><span>On Track</span></div>
+          <div style="display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:2px;background:rgba(16,185,129,0.15);border:1px solid var(--emerald-500);display:inline-block"></span><span>Completed</span></div>
+          <div style="display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:2px;background:rgba(245,158,11,0.15);border:1px solid var(--amber-500);display:inline-block"></span><span>Delayed</span></div>
+          <div style="display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:2px;background:rgba(244,63,94,0.15);border:1px solid var(--rose-500);display:inline-block"></span><span>Blocked</span></div>
+          <div style="display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:2px;background:rgba(244,63,94,0.25);border:1.5px solid var(--rose-500);box-shadow:0 0 3px rgba(244,63,94,0.25);display:inline-block"></span><span>Critical</span></div>
+        </div>
+        <div class="btn-group">
+          ${['day', 'week', 'month', 'quarter'].map(s => `<button class="btn-group-item ${state.ganttScale === s ? 'active' : ''}" data-gantt-scale="${s}">${s.charAt(0).toUpperCase() + s.slice(1)}s</button>`).join('')}
+        </div>
       </div>
     </div>
-    <div class="gantt-wrap">
-      <div class="gantt-container">
+    
+    <div class="gantt-wrap" id="gantt-scroll-container">
+      <div class="gantt-scroll-spacer" style="position:absolute;top:0;left:0;width:1px;height:${headerHeight + totalTasks * rowHeight}px;pointer-events:none;"></div>
+      
+      <div class="gantt-container" style="width:${280 + chartWidth}px;">
         <div class="gantt-labels">
           <div class="gantt-header-cell">Activity Name</div>
-          ${taskLabels}
+          <div class="gantt-visible-labels" style="position:relative;height:${totalTasks * rowHeight}px;">
+          </div>
         </div>
+        
         <div class="gantt-chart-area">
-          <div class="gantt-time-header" style="position:relative">${timeHeader}</div>
-          <div>${taskBars}</div>
+          <div class="gantt-time-header" style="width:${chartWidth}px;">
+            <div class="gantt-time-header-top" style="position:relative;height:22px;width:${chartWidth}px;border-bottom:1px solid var(--slate-850);display:flex;align-items:center;">
+              ${headers.topHtml}
+            </div>
+            <div class="gantt-time-header-bottom" style="position:relative;height:22px;width:${chartWidth}px;display:flex;align-items:center;">
+              ${headers.bottomHtml}
+            </div>
+          </div>
+          
+          <div class="gantt-grid-lines" style="position:absolute;top:${headerHeight}px;left:0;width:${chartWidth}px;height:${totalTasks * rowHeight}px;pointer-events:none;">
+            ${headers.gridLinesHtml}
+          </div>
+          
+          <svg class="gantt-svg-overlay" style="width:${chartWidth}px;height:${totalTasks * rowHeight}px;pointer-events:none;">
+            <defs>
+              <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="var(--slate-400)" />
+              </marker>
+              <marker id="arrow-critical" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="var(--rose-400)" />
+              </marker>
+              <marker id="arrow-hover" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="var(--brand-300)" />
+              </marker>
+            </defs>
+            <g class="gantt-svg-paths"></g>
+          </svg>
+          
+          <div class="gantt-visible-bars" style="position:relative;height:${totalTasks * rowHeight}px;width:${chartWidth}px;">
+          </div>
+
+          ${showTodayLine ? `
+          <div class="gantt-today-line" style="left:${todayPx}px;top:0;height:${headerHeight + totalTasks * rowHeight}px;">
+            <span class="gantt-today-label">Today</span>
+          </div>` : ''}
         </div>
       </div>
     </div>
   </div>`;
+}
+
+function initGanttViewEvents() {
+  const vc = document.getElementById('view-container');
+  if (!vc) return;
+
+  const project = state.projects.find(p => p.ID === state.activeProjectId);
+  if (!project) return;
+  
+  const projectTasks = state.tasks.filter(t => t.ProjectID === project.ID).sort((a, b) => compareTaskIds(a.ID, b.ID));
+  if (projectTasks.length === 0) return;
+
+  const todayStr = new Date().toISOString().split('T')[0];
+  projectTasks.forEach(t => {
+    if (!t.PlannedStartDate) t.PlannedStartDate = project.PlannedStartDate || todayStr;
+    if (!t.PlannedEndDate) t.PlannedEndDate = project.PlannedEndDate || todayStr;
+  });
+
+  const allDates = projectTasks.flatMap(t => [t.PlannedStartDate, t.PlannedEndDate]).filter(Boolean).map(d => new Date(d));
+  let minDate = allDates.length > 0 ? new Date(Math.min(...allDates)) : new Date();
+  minDate.setHours(0,0,0,0);
+  
+  let paddingDays = 14;
+  if (state.ganttScale === 'day') paddingDays = 7;
+  else if (state.ganttScale === 'week') paddingDays = 28;
+  else if (state.ganttScale === 'month') paddingDays = 90;
+  else if (state.ganttScale === 'quarter') paddingDays = 180;
+  minDate.setDate(minDate.getDate() - paddingDays);
+
+  if (state.ganttScale === 'week') {
+    minDate.setDate(minDate.getDate() - minDate.getDay());
+  } else if (state.ganttScale === 'month') {
+    minDate.setDate(1);
+  } else if (state.ganttScale === 'quarter') {
+    minDate.setDate(1);
+    minDate.setMonth(Math.floor(minDate.getMonth() / 3) * 3);
+  }
+
+  let pxPerDay = 8;
+  if (state.ganttScale === 'day') pxPerDay = 32;
+  else if (state.ganttScale === 'week') pxPerDay = 8;
+  else if (state.ganttScale === 'month') pxPerDay = 2.5;
+  else if (state.ganttScale === 'quarter') pxPerDay = 0.8;
+
+  const cpm = calculateCriticalPath(project.ID);
+
+  const scrollContainer = vc.querySelector('#gantt-scroll-container');
+  if (!scrollContainer) return;
+
+  // Zoom clicks with scroll preservation
+  vc.querySelectorAll('[data-gantt-scale]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const newScale = btn.dataset.ganttScale;
+      const scrollCenterX = scrollContainer.scrollLeft + scrollContainer.clientWidth / 2;
+      const scrollWidthBefore = scrollContainer.scrollWidth;
+
+      state.ganttScale = newScale;
+      render();
+
+      const newContainer = document.getElementById('gantt-scroll-container');
+      if (newContainer) {
+        const ratio = newContainer.scrollWidth / scrollWidthBefore;
+        newContainer.scrollLeft = scrollCenterX * ratio - newContainer.clientWidth / 2;
+      }
+    });
+  });
+
+  // Toggle Edit mode
+  vc.querySelector('#gantt-edit-toggle')?.addEventListener('click', () => {
+    state.editTimelineMode = !state.editTimelineMode;
+    render();
+  });
+
+  // Toggle CPM Path
+  vc.querySelector('#gantt-cpm-toggle')?.addEventListener('click', () => {
+    state.showCriticalPath = !state.showCriticalPath;
+    render();
+  });
+
+  // Keyboard shortcuts
+  const handleGanttKeydown = (e) => {
+    if (state.workspaceTab !== 'gantt') return;
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+
+    if (e.ctrlKey && e.key.toLowerCase() === 'e') {
+      e.preventDefault();
+      state.editTimelineMode = !state.editTimelineMode;
+      showToast(state.editTimelineMode ? 'Edit Timeline Mode Enabled' : 'Edit Timeline Mode Disabled', 'info');
+      render();
+    } else if (e.ctrlKey && e.key.toLowerCase() === 'c') {
+      e.preventDefault();
+      state.showCriticalPath = !state.showCriticalPath;
+      render();
+    } else if (e.key === '+') {
+      e.preventDefault();
+      const scales = ['day', 'week', 'month', 'quarter'];
+      const idx = scales.indexOf(state.ganttScale);
+      if (idx > 0) {
+        state.ganttScale = scales[idx - 1];
+        render();
+      }
+    } else if (e.key === '-') {
+      e.preventDefault();
+      const scales = ['day', 'week', 'month', 'quarter'];
+      const idx = scales.indexOf(state.ganttScale);
+      if (idx < scales.length - 1) {
+        state.ganttScale = scales[idx + 1];
+        render();
+      }
+    }
+  };
+  window.removeEventListener('keydown', window._ganttKeydownHandler);
+  window._ganttKeydownHandler = handleGanttKeydown;
+  window.addEventListener('keydown', handleGanttKeydown);
+
+  // Virtualized row updates
+  const updateVirtualRows = () => {
+    const scrollTop = scrollContainer.scrollTop;
+    const clientHeight = scrollContainer.clientHeight;
+    const rowHeight = 40;
+    const buffer = 5;
+
+    const startIdx = Math.max(0, Math.floor(scrollTop / rowHeight) - buffer);
+    const endIdx = Math.min(projectTasks.length - 1, Math.ceil((scrollTop + clientHeight) / rowHeight) + buffer);
+
+    // Labels
+    const labelsContainer = scrollContainer.querySelector('.gantt-visible-labels');
+    if (labelsContainer) {
+      const labelsHtml = [];
+      for (let i = startIdx; i <= endIdx; i++) {
+        const t = projectTasks[i];
+        const level = String(t.ID).split('.').length - 1;
+        const isCrit = state.showCriticalPath && cpm.criticalTaskIds.has(t.ID);
+        labelsHtml.push(`
+          <div class="gantt-task-label" style="top:${i * rowHeight}px;padding-left:${16 + level * 12}px;${isCrit ? 'border-left:3px solid var(--rose-500);' : ''}" data-task-id="${t.ID}">
+            <span style="font-size:10px;color:var(--text-dim);margin-right:6px">${escHtml(t.ID)}</span>
+            <span style="color:${isCrit ? 'var(--rose-400)' : 'var(--text-secondary)'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(t.Name)}</span>
+          </div>
+        `);
+      }
+      labelsContainer.innerHTML = labelsHtml.join('');
+    }
+
+    // Bars
+    const barsContainer = scrollContainer.querySelector('.gantt-visible-bars');
+    if (barsContainer) {
+      const barsHtml = [];
+      for (let i = startIdx; i <= endIdx; i++) {
+        const t = projectTasks[i];
+        const start = new Date(t.PlannedStartDate);
+        const end = new Date(t.PlannedEndDate);
+        const leftPx = (start - minDate) / 86400000 * pxPerDay;
+        const widthPx = Math.max(12, (end - start) / 86400000 * pxPerDay);
+        const level = String(t.ID).split('.').length - 1;
+
+        let barBorder = 'var(--brand-500)', barBg = 'rgba(129,0,85,0.15)', fillBg = 'var(--brand-500)';
+        if (level === 0) { barBorder = '#6366f1'; barBg = 'rgba(99,102,241,0.1)'; fillBg = '#6366f1'; }
+        if (t.Status === 'delayed') { barBorder = 'var(--amber-500)'; barBg = 'rgba(245,158,11,0.1)'; fillBg = 'var(--amber-500)'; }
+        if (t.Status === 'blocked') { barBorder = 'var(--rose-500)'; barBg = 'rgba(244,63,94,0.1)'; fillBg = 'var(--rose-500)'; }
+        if (t.Status === 'completed') { barBorder = 'var(--emerald-500)'; barBg = 'rgba(16,185,129,0.1)'; fillBg = 'var(--emerald-500)'; }
+
+        const isCrit = state.showCriticalPath && cpm.criticalTaskIds.has(t.ID);
+        const editableClass = state.editTimelineMode ? 'editable' : '';
+
+        barsHtml.push(`
+          <div class="gantt-bar-row" style="top:${i * rowHeight}px;">
+            <div class="gantt-bar ${editableClass} ${isCrit ? 'critical' : ''}" 
+                 style="left:${leftPx}px;width:${widthPx}px;background:${barBg};border-color:${barBorder};" 
+                 data-task-id="${t.ID}" 
+                 title="${escHtml(t.Name)}: ${t.Progress}% (${formatDate(t.PlannedStartDate)} – ${formatDate(t.PlannedEndDate)})">
+              ${state.editTimelineMode ? '<div class="gantt-handle-left"></div>' : ''}
+              <div class="gantt-bar-fill" style="width:${t.Progress || 0}%;background:${fillBg}"></div>
+              ${widthPx > 45 ? `<span class="gantt-bar-text">${t.Progress}%</span>` : ''}
+              ${state.editTimelineMode ? '<div class="gantt-handle-right"></div>' : ''}
+            </div>
+            <span class="gantt-bar-label" style="left:${leftPx + widthPx + 8}px;">
+              ${t.Progress}% • ${escHtml(t.Assignee || 'Unassigned')}
+            </span>
+          </div>
+        `);
+      }
+      barsContainer.innerHTML = barsHtml.join('');
+    }
+
+    // SVG Dependency Paths
+    const svgGroup = scrollContainer.querySelector('.gantt-svg-paths');
+    if (svgGroup) {
+      const paths = [];
+      projectTasks.forEach((t, i) => {
+        const deps = parseDependencies(t.Dependencies);
+        deps.forEach(d => {
+          const predIdx = projectTasks.findIndex(pt => pt.ID === d.predecessorId);
+          if (predIdx === -1) return;
+
+          if ((i >= startIdx && i <= endIdx) || (predIdx >= startIdx && predIdx <= endIdx)) {
+            const p = projectTasks[predIdx];
+            const startP = new Date(p.PlannedStartDate);
+            const endP = new Date(p.PlannedEndDate);
+            const leftP = (startP - minDate) / 86400000 * pxPerDay;
+            const widthP = Math.max(12, (endP - startP) / 86400000 * pxPerDay);
+
+            const startT = new Date(t.PlannedStartDate);
+            const endT = new Date(t.PlannedEndDate);
+            const leftT = (startT - minDate) / 86400000 * pxPerDay;
+            const widthT = Math.max(12, (endT - startT) / 86400000 * pxPerDay);
+
+            const yA = predIdx * rowHeight + 20;
+            const yB = i * rowHeight + 20;
+            
+            let xA = 0;
+            let xB = 0;
+            let pathD = '';
+            let isCritLink = state.showCriticalPath && cpm.criticalTaskIds.has(t.ID) && cpm.criticalTaskIds.has(p.ID);
+
+            if (d.type === 'FS') {
+              xA = leftP + widthP;
+              xB = leftT;
+              const midX = xA + 10;
+              if (xB >= xA) {
+                pathD = `M ${xA} ${yA} L ${midX} ${yA} L ${midX} ${yB} L ${xB} ${yB}`;
+              } else {
+                const midY = (yA + yB) / 2;
+                pathD = `M ${xA} ${yA} L ${xA + 10} ${yA} L ${xA + 10} ${midY} L ${xB - 10} ${midY} L ${xB - 10} ${yB} L ${xB} ${yB}`;
+              }
+            } else if (d.type === 'SS') {
+              xA = leftP;
+              xB = leftT;
+              const midX = Math.min(xA, xB) - 10;
+              pathD = `M ${xA} ${yA} L ${midX} ${yA} L ${midX} ${yB} L ${xB} ${yB}`;
+            } else if (d.type === 'FF') {
+              xA = leftP + widthP;
+              xB = leftT + widthT;
+              const midX = Math.max(xA, xB) + 10;
+              pathD = `M ${xA} ${yA} L ${midX} ${yA} L ${midX} ${yB} L ${xB} ${yB}`;
+            } else if (d.type === 'SF') {
+              xA = leftP;
+              xB = leftT + widthT;
+              const midX = xA - 10;
+              pathD = `M ${xA} ${yA} L ${midX} ${yA} L ${midX} ${yB} L ${xB} ${yB}`;
+            }
+
+            const markerId = isCritLink ? 'arrow-critical' : 'arrow';
+            paths.push(`
+              <path class="gantt-dep-path ${isCritLink ? 'critical-link' : ''}" 
+                    d="${pathD}" 
+                    marker-end="url(#${markerId})" 
+                    title="${escHtml(p.ID)} → ${escHtml(t.ID)} (${d.type})"
+                    data-from="${p.ID}"
+                    data-to="${t.ID}" />
+            `);
+          }
+        });
+      });
+      svgGroup.innerHTML = paths.join('');
+    }
+  };
+
+  let frameRequest = null;
+  const handleScroll = () => {
+    if (frameRequest) cancelAnimationFrame(frameRequest);
+    frameRequest = requestAnimationFrame(() => {
+      updateVirtualRows();
+    });
+  };
+  scrollContainer.addEventListener('scroll', handleScroll);
+  updateVirtualRows();
+
+  // Double click to edit
+  scrollContainer.addEventListener('dblclick', (e) => {
+    const label = e.target.closest('.gantt-task-label');
+    const bar = e.target.closest('.gantt-bar');
+    const taskId = label ? label.dataset.taskId : (bar ? bar.dataset.taskId : null);
+    if (taskId) {
+      openEditTaskModal(taskId);
+    }
+  });
+
+  // Drag and Drop
+  const barsContainer = scrollContainer.querySelector('.gantt-visible-bars');
+  if (barsContainer) {
+    barsContainer.addEventListener('mousedown', (e) => {
+      if (!state.editTimelineMode) return;
+      const bar = e.target.closest('.gantt-bar');
+      if (!bar) return;
+
+      const taskId = bar.dataset.taskId;
+      const t = state.tasks.find(x => x.ProjectID === state.activeProjectId && x.ID === taskId);
+      if (!t) return;
+
+      e.preventDefault();
+
+      const handleLeft = e.target.classList.contains('gantt-handle-left');
+      const handleRight = e.target.classList.contains('gantt-handle-right');
+      const action = handleLeft ? 'resize-left' : (handleRight ? 'resize-right' : 'drag');
+
+      const startX = e.clientX;
+      const initialStart = new Date(t.PlannedStartDate).getTime();
+      const initialEnd = new Date(t.PlannedEndDate).getTime();
+      const initialDur = initialEnd - initialStart;
+
+      const tooltip = document.createElement('div');
+      tooltip.className = 'gantt-drag-tooltip';
+      tooltip.style.left = (e.clientX + 15) + 'px';
+      tooltip.style.top = (e.clientY + 15) + 'px';
+      tooltip.innerText = `${formatDate(initialStart)} – ${formatDate(initialEnd)} (${Math.max(1, Math.round(initialDur / 86400000))} days)`;
+      document.body.appendChild(tooltip);
+      document.body.style.userSelect = 'none';
+
+      let finalStart = initialStart;
+      let finalEnd = initialEnd;
+
+      const onMouseMove = (moveEvent) => {
+        const deltaX = moveEvent.clientX - startX;
+        const deltaDays = Math.round(deltaX / pxPerDay);
+
+        if (action === 'drag') {
+          finalStart = initialStart + deltaDays * 86400000;
+          finalEnd = initialEnd + deltaDays * 86400000;
+        } else if (action === 'resize-left') {
+          finalStart = Math.min(initialEnd - 86400000, initialStart + deltaDays * 86400000);
+          finalEnd = initialEnd;
+        } else if (action === 'resize-right') {
+          finalStart = initialStart;
+          finalEnd = Math.max(initialStart + 86400000, initialEnd + deltaDays * 86400000);
+        }
+
+        const calculatedDur = finalEnd - finalStart;
+        tooltip.innerText = `${formatDate(finalStart)} – ${formatDate(finalEnd)} (${Math.max(1, Math.round(calculatedDur / 86400000))} days)`;
+        tooltip.style.left = (moveEvent.clientX + 15) + 'px';
+        tooltip.style.top = (moveEvent.clientY + 15) + 'px';
+
+        const newLeftPx = (finalStart - minDate) / 86400000 * pxPerDay;
+        const newWidthPx = Math.max(12, (finalEnd - finalStart) / 86400000 * pxPerDay);
+        bar.style.left = newLeftPx + 'px';
+        bar.style.width = newWidthPx + 'px';
+      };
+
+      const onMouseUp = () => {
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+        tooltip.remove();
+        document.body.style.userSelect = '';
+
+        t.PlannedStartDate = new Date(finalStart).toISOString().split('T')[0];
+        t.PlannedEndDate = new Date(finalEnd).toISOString().split('T')[0];
+
+        propagateSchedule(state.activeProjectId);
+        const { updatedProjects } = performProjectRollups(state.activeProjectId, state.tasks, state.projects);
+        state.projects = updatedProjects;
+
+        saveStateToServer(state.projects, state.tasks, state.teamMembers, state.srfs);
+        showToast('Timeline updated.');
+        render();
+      };
+
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', onMouseUp);
+    });
+  }
 }
 
 function renderTasksTab(project, projectTasks) {
@@ -1547,7 +2423,7 @@ function renderKaizenTab(project, projectKaizens) {
 
     const pipelineSteps = steps.map((s, si) => {
       const isDone = !!k[s.key];
-      const isCurrent = (!isDone && (si === 0 || !!k[steps[si-1].key])) || (isDone && si === completedCount - 1);
+      const isCurrent = (!isDone && (si === 0 || !!k[steps[si - 1].key])) || (isDone && si === completedCount - 1);
       return `<div class="kaizen-pipeline-step ${isDone ? 'done' : ''} ${isCurrent ? 'current' : ''}">
         <label class="kaizen-pipeline-node">
           <input type="checkbox" ${isDone ? 'checked' : ''} class="kaizen-step-check kaizen-pipeline-checkbox" data-kaizen-id="${escHtml(k.ID)}" data-step-key="${s.key}">
@@ -1865,6 +2741,8 @@ function openTaskModal(task) {
           <select name="assignee" class="form-input">${pmOptions}</select></div>
         <div class="form-group" style="grid-column:1/-1"><label class="form-label">Activity Name *</label>
           <input type="text" name="taskName" required class="form-input" value="${escHtml(task ? task.Name : '')}"></div>
+        <div class="form-group" style="grid-column:1/-1"><label class="form-label">Predecessors (comma-separated, e.g. 1.1, 1.2SS, 1.3FF, 1.4SF)</label>
+          <input type="text" name="dependencies" class="form-input" placeholder="e.g. 1.1, 1.2SS" value="${escHtml(task && task.Dependencies ? task.Dependencies : '')}"></div>
         <div class="form-group"><label class="form-label">Planned Start Date</label>
           <input type="date" name="plannedStart" class="form-input" value="${escHtml(task ? task.PlannedStartDate || '' : '')}"></div>
         <div class="form-group"><label class="form-label">Planned End Date</label>
@@ -1897,7 +2775,7 @@ function openTaskModal(task) {
     const handleTaskIdChange = () => {
       const val = taskIdInput.value.trim();
       if (!val) return;
-      
+
       const project = state.projects.find(p => p.ID === state.activeProjectId);
       if (!project) return;
 
@@ -1943,6 +2821,21 @@ function openTaskModal(task) {
     modal.querySelector('#task-form').addEventListener('submit', (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
+      const depStr = fd.get('dependencies') || '';
+      const deps = parseDependencies(depStr);
+
+      for (const d of deps) {
+        const exists = state.tasks.some(t => t.ProjectID === state.activeProjectId && t.ID === d.predecessorId && t.ID !== fd.get('taskId'));
+        if (!exists) {
+          showToast(`Predecessor task ${d.predecessorId} not found in this project.`, 'error');
+          return;
+        }
+        if (wouldCreateCycle(state.activeProjectId, fd.get('taskId'), d.predecessorId)) {
+          showToast(`Adding predecessor ${d.predecessorId} creates a circular dependency loop!`, 'error');
+          return;
+        }
+      }
+
       const updatedTask = {
         ID: fd.get('taskId'),
         ProjectID: state.activeProjectId,
@@ -1957,17 +2850,22 @@ function openTaskModal(task) {
         DaysDelayed: task ? task.DaysDelayed || 0 : 0,
         DelayReason: fd.get('delayReason'),
         DelayImpact: fd.get('delayImpact'),
-        DelayReportedBy: fd.get('reportedBy')
+        DelayReportedBy: fd.get('reportedBy'),
+        Dependencies: depStr
       };
+
       let newTasks = [...state.tasks];
       if (isEditing) {
         newTasks = newTasks.map(t => (t.ProjectID === state.activeProjectId && t.ID === task.ID) ? updatedTask : t);
       } else {
         newTasks.push(updatedTask);
       }
-      const { updatedProjects } = performProjectRollups(state.activeProjectId, newTasks, state.projects);
+
       state.tasks = newTasks;
+      propagateSchedule(state.activeProjectId);
+      const { updatedProjects } = performProjectRollups(state.activeProjectId, state.tasks, state.projects);
       state.projects = updatedProjects;
+
       saveStateToServer(state.projects, state.tasks, state.teamMembers, state.srfs);
       showToast(isEditing ? 'Task updated.' : 'Task added.');
       closeModal();
@@ -2026,7 +2924,7 @@ function openKaizenModal(kaizen) {
         ApprovedL1: fd.get('approvedL1') || '',
         ApprovedL2: fd.get('approvedL2') || ''
       };
-      
+
       let newKaizens = [...state.kaizens];
       if (isEditing) {
         newKaizens = newKaizens.map(k => (k.ProjectID === state.activeProjectId && k.ID === kaizen.ID) ? updatedKaizen : k);
@@ -2183,9 +3081,9 @@ function setupViewEvents() {
     btn.addEventListener('click', () => { state.workspaceTab = btn.dataset.tab; render(); });
   });
 
-  vc.querySelectorAll('.btn-group-item[data-gantt-scale]').forEach(btn => {
-    btn.addEventListener('click', () => { state.ganttScale = btn.dataset.ganttScale; render(); });
-  });
+  if (state.workspaceTab === 'gantt') {
+    initGanttViewEvents();
+  }
 
   // Task events
   vc.querySelector('#add-task-btn')?.addEventListener('click', openAddTaskModal);
