@@ -1017,15 +1017,16 @@ function updateNav() {
   // Show/hide create project btn & department filter dropdown
   const createBtn = document.getElementById('create-project-btn');
   const deptSelect = document.getElementById('header-dept-filter');
-  const show = state.projects.length > 0 && state.currentView !== 'workspace';
+  const showCreate = state.projects.length > 0 && state.currentView !== 'workspace';
+  const showDept = state.projects.length > 0 && state.currentView === 'dashboard';
   
   if (createBtn) {
-    createBtn.style.display = show ? 'inline-flex' : 'none';
+    createBtn.style.display = showCreate ? 'inline-flex' : 'none';
   }
   
   if (deptSelect) {
-    deptSelect.style.display = show ? 'inline-block' : 'none';
-    if (show) {
+    deptSelect.style.display = showDept ? 'inline-block' : 'none';
+    if (showDept) {
       const departments = [...new Set(state.projects.map(p => p.Department).filter(Boolean))].sort();
       let options = '<option value="">All Departments</option>';
       departments.forEach(d => {
@@ -1831,10 +1832,10 @@ function buildTimeHeaderHtml(minDate, maxDate, scale, pxPerDay) {
       const left = dayIndex * pxPerDay;
       const dayNum = current.getDate();
       const isWeekend = current.getDay() === 0 || current.getDay() === 6;
-      const weekendStyle = isWeekend ? 'background:rgba(244,63,94,0.05);' : '';
+      const weekendStyle = isWeekend ? 'background:rgba(244,63,94,0.07);' : '';
       bottomCells.push(`<div class="gantt-time-col-bottom" style="left:${left}px;width:${pxPerDay}px;justify-content:center;padding:0;${weekendStyle}">${dayNum}</div>`);
 
-      gridLines.push(`<div class="gantt-grid-line" style="left:${left}px;${isWeekend ? 'background:rgba(244,63,94,0.03);' : ''}"></div>`);
+      gridLines.push(`<div class="gantt-grid-line" style="left:${left}px;width:${pxPerDay}px;border-right:1px solid rgba(255,255,255,0.06);${isWeekend ? 'background:rgba(244,63,94,0.05);' : ''}"></div>`);
 
       const next = new Date(current);
       next.setDate(next.getDate() + 1);
@@ -1863,8 +1864,6 @@ function buildTimeHeaderHtml(minDate, maxDate, scale, pxPerDay) {
       const label = current.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
       bottomCells.push(`<div class="gantt-time-col-bottom" style="left:${left}px;width:${pxPerDay * 7}px;">${label}</div>`);
 
-      gridLines.push(`<div class="gantt-grid-line" style="left:${left}px;"></div>`);
-
       const next = new Date(current);
       next.setDate(next.getDate() + 7);
 
@@ -1880,6 +1879,30 @@ function buildTimeHeaderHtml(minDate, maxDate, scale, pxPerDay) {
 
       current = next;
       weekIndex++;
+    }
+
+    // Draw daily gridlines & weekend shade overlay for week scale
+    let currentDay = new Date(start);
+    let dayIndex = 0;
+    while (currentDay <= end) {
+      const left = dayIndex * pxPerDay;
+      const isWeekend = currentDay.getDay() === 0 || currentDay.getDay() === 6;
+      const isWeekStart = currentDay.getDay() === 1; // Monday week start boundary
+      
+      let gridStyle = '';
+      if (isWeekend) {
+        gridStyle += 'background:rgba(244,63,94,0.05);';
+      }
+      if (isWeekStart) {
+        gridStyle += 'border-right:1px solid rgba(255,255,255,0.12);';
+      } else {
+        gridStyle += 'border-right:1px dashed rgba(255,255,255,0.03);';
+      }
+
+      gridLines.push(`<div class="gantt-grid-line" style="left:${left}px;width:${pxPerDay}px;${gridStyle}"></div>`);
+
+      currentDay.setDate(currentDay.getDate() + 1);
+      dayIndex++;
     }
   } else if (scale === 'month') {
     let current = new Date(start);
@@ -2145,6 +2168,17 @@ function initGanttViewEvents() {
 
   const scrollContainer = vc.querySelector('#gantt-scroll-container');
   if (!scrollContainer) return;
+
+  if (state.shouldCenterGanttToday) {
+    state.shouldCenterGanttToday = false;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayPx = (today - minDate) / 86400000 * pxPerDay;
+    if (todayPx > 0) {
+      const chartViewportWidth = scrollContainer.clientWidth - 280;
+      scrollContainer.scrollLeft = todayPx - (chartViewportWidth / 2);
+    }
+  }
 
   // Zoom clicks with scroll preservation
   vc.querySelectorAll('[data-gantt-scale]').forEach(btn => {
@@ -3394,7 +3428,13 @@ function setupViewEvents() {
   });
 
   vc.querySelectorAll('.tab-btn').forEach(btn => {
-    btn.addEventListener('click', () => { state.workspaceTab = btn.dataset.tab; render(); });
+    btn.addEventListener('click', () => {
+      state.workspaceTab = btn.dataset.tab;
+      if (btn.dataset.tab === 'gantt') {
+        state.shouldCenterGanttToday = true;
+      }
+      render();
+    });
   });
 
   if (state.workspaceTab === 'gantt') {

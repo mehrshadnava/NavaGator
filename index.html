@@ -35,14 +35,14 @@
     <!-- Main Panel -->
     <main class="main-panel">
       <header class="main-header" id="main-header">
-        <div style="display:flex;align-items:center;gap:16px">
-          <h1 id="main-header-title" style="margin:0">Analytical Dashboard</h1>
+        <h1 id="main-header-title" style="margin:0">Analytical Dashboard</h1>
+        <div style="display:flex;align-items:center;gap:12px">
           <select id="header-dept-filter" class="form-input" style="width:160px;margin-bottom:0;padding:4px 8px;font-size:11px;background:rgba(28,6,23,0.6);border:1px solid rgba(59,17,48,0.8);color:white;display:none;height:28px;border-radius:6px;cursor:pointer"></select>
+          <button class="btn-primary" id="create-project-btn" style="display:none">
+            <i data-lucide="plus"></i>
+            <span>Create Project</span>
+          </button>
         </div>
-        <button class="btn-primary" id="create-project-btn" style="display:none">
-          <i data-lucide="plus"></i>
-          <span>Create Project</span>
-        </button>
       </header>
 
       <!-- View Content Area -->
