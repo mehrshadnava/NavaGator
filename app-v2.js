@@ -1282,14 +1282,14 @@ function renderDashboard(container) {
               <div class="benefit-kpi-icon ${state.benefitsConverted ? 'emerald' : 'muted'}">${svgIcon('indian-rupee')}</div>
               <div>
                 <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:var(--text-muted)">Financial Savings</div>
-                <div class="kpi-val" style="font-size:15px;font-weight:700;color:white;margin-top:2px">${escHtml(formatCurrency(displaySavings))}</div>
+                <div class="kpi-val" style="font-size:15px;font-weight:700;color:var(--text-primary);margin-top:2px">${escHtml(formatCurrency(displaySavings))}</div>
               </div>
             </div>
             <div class="benefit-kpi-card ${!state.benefitsConverted ? 'active-brand' : 'inactive'}" id="btn-show-mandays" title="Show original man-days">
               <div class="benefit-kpi-icon ${!state.benefitsConverted ? 'brand' : 'muted'}">${svgIcon('calendar-days')}</div>
               <div>
-                <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:var(--text-muted)">Man-Days Saved</div>
-                <div class="kpi-val" style="font-size:15px;font-weight:700;color:white;margin-top:2px">${displayMD} Days</div>
+                <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:var(--text-muted)">Man-days Savings</div>
+                <div class="kpi-val" style="font-size:15px;font-weight:700;color:var(--text-primary);margin-top:2px">${displayMD} Days</div>
               </div>
             </div>
           </div>
@@ -1596,7 +1596,7 @@ function renderProjects(container) {
         <div class="filter-select-wrap">${svgIcon('filter')}
           <select id="proj-dept-filter">
             <option value="">All Departments</option>
-            ${departments.map(d => `<option value="${escHtml(d)}" ${state.projectDeptFilter === d ? 'selected' : ''} style="background:var(--slate-950);text-transform:capitalize">${escHtml(d)}</option>`).join('')}
+            ${departments.map(d => `<option value="${escHtml(d)}" ${state.projectDeptFilter === d ? 'selected' : ''} style="text-transform:capitalize">${escHtml(d)}</option>`).join('')}
           </select>
         </div>
         <div class="filter-select-wrap">${svgIcon('briefcase')}
@@ -1616,7 +1616,7 @@ function renderProjects(container) {
             <option value="savings" ${state.projectSortBy === 'savings' ? 'selected' : ''}>Sort by Savings</option>
           </select>
         </div>
-        <button class="btn-ghost" id="clear-filters-btn" style="border:1px solid var(--slate-800);padding:8px 16px;border-radius:var(--r-lg);color:var(--text-secondary);font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;transition:all 0.2s">
+        <button class="btn-ghost" id="clear-filters-btn" style="padding:8px 16px;border-radius:var(--r-lg);font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;transition:all 0.2s">
           ${svgIcon('filter-x')} <span>Clear Filters</span>
         </button>
       </div>
@@ -1655,7 +1655,7 @@ function renderWorkspace(container) {
       <div style="display:flex;align-items:center;gap:16px">
         <button class="btn-icon" id="ws-back-btn" title="Back to projects">${svgIcon('arrow-left')}</button>
         <div>
-          <h2 style="font-size:20px;font-weight:700;color:white;margin-bottom:6px">${escHtml(project.Name)}</h2>
+          <h2 style="font-size:20px;font-weight:700;color:var(--text-primary);margin-bottom:6px">${escHtml(project.Name)}</h2>
           <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-muted);text-transform:capitalize">
             <span style="font-weight:600;color:var(--text-secondary);background:var(--slate-850);padding:2px 8px;border-radius:6px;border:1px solid var(--slate-800)">${escHtml(project.Department)}</span>
             <span>•</span>
@@ -1719,10 +1719,10 @@ function renderOverviewTab(project, projectTasks, projectSRFs) {
           <span class="count">${project.Progress || 0}%</span>
         </div>
       </div>
-      <div style="width:100%;background:rgba(59,17,48,0.4);border:1px solid rgba(59,17,48,0.8);border-radius:var(--r-xl);padding:12px;font-size:12px;text-align:left;display:flex;flex-direction:column;gap:8px">
+      <div class="glass-card" style="width:100%;border-radius:var(--r-xl);padding:12px;font-size:12px;text-align:left;display:flex;flex-direction:column;gap:8px">
         <div style="display:flex;justify-content:space-between">
           <span style="color:var(--text-dim)">Leaf Activity:</span>
-          <span style="color:white;font-weight:700">${leafTasks.length}</span>
+          <span style="color:var(--text-primary);font-weight:700">${leafTasks.length}</span>
         </div>
         <div style="display:flex;justify-content:space-between">
           <span style="color:var(--text-dim)">Completed Tasks:</span>
@@ -1749,21 +1749,21 @@ function renderOverviewTab(project, projectTasks, projectSRFs) {
 
         <!-- Subtle Spendings Panels (Redesigned Grid Cards) -->
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px">
-          <div class="glass-card" style="padding:14px;border:1px solid var(--slate-850);border-radius:12px;background:rgba(28,6,23,0.3);display:flex;align-items:center;gap:12px">
+          <div class="glass-card" style="padding:14px;border-radius:12px;display:flex;align-items:center;gap:12px">
             <div style="width:32px;height:32px;border-radius:50%;background:rgba(129,0,85,0.15);color:var(--brand-400);display:flex;align-items:center;justify-content:center">${svgIcon('credit-card', 'w-4 h-4')}</div>
             <div>
               <div style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.06em;font-weight:700">Total Spending</div>
-              <div style="font-size:14px;font-weight:800;color:white;margin-top:2px">${escHtml(formatCurrency(totalSpending))}</div>
+              <div style="font-size:14px;font-weight:800;color:var(--text-primary);margin-top:2px">${escHtml(formatCurrency(totalSpending))}</div>
             </div>
           </div>
-          <div class="glass-card" style="padding:14px;border:1px solid var(--slate-850);border-radius:12px;background:rgba(28,6,23,0.3);display:flex;align-items:center;gap:12px">
+          <div class="glass-card" style="padding:14px;border-radius:12px;display:flex;align-items:center;gap:12px">
             <div style="width:32px;height:32px;border-radius:50%;background:rgba(59,130,246,0.1);color:var(--blue-400);display:flex;align-items:center;justify-content:center">${svgIcon('users', 'w-4 h-4')}</div>
             <div>
               <div style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.06em;font-weight:700">In-House Cost</div>
-              <div style="font-size:14px;font-weight:800;color:var(--text-secondary);margin-top:2px">${escHtml(formatCurrency(inHouseCost))}</div>
+              <div style="font-size:14px;font-weight:800;color:var(--text-primary);margin-top:2px">${escHtml(formatCurrency(inHouseCost))}</div>
             </div>
           </div>
-          <div class="glass-card" style="padding:14px;border:1px solid var(--slate-850);border-radius:12px;background:rgba(28,6,23,0.3);display:flex;align-items:center;gap:12px">
+          <div class="glass-card" style="padding:14px;border-radius:12px;display:flex;align-items:center;gap:12px">
             <div style="width:32px;height:32px;border-radius:50%;background:rgba(244,63,94,0.1);color:var(--rose-400);display:flex;align-items:center;justify-content:center">${svgIcon('file-spreadsheet', 'w-4 h-4')}</div>
             <div>
               <div style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.06em;font-weight:700">GITL / SRF Cost</div>
@@ -1791,7 +1791,7 @@ function renderOverviewTab(project, projectTasks, projectSRFs) {
       <h3 style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em">Project Timeline Study</h3>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">
         <div class="timeline-block">
-          <div style="display:flex;align-items:center;gap:8px;font-weight:600;color:white;margin-bottom:16px">
+          <div style="display:flex;align-items:center;gap:8px;font-weight:600;color:var(--text-primary);margin-bottom:16px">
             <div style="width:10px;height:10px;border-radius:50%;background:var(--blue-500)"></div> Planned Schedule
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;font-size:13px">
@@ -1800,7 +1800,7 @@ function renderOverviewTab(project, projectTasks, projectSRFs) {
           </div>
         </div>
         <div class="timeline-block">
-          <div style="display:flex;align-items:center;gap:8px;font-weight:600;color:white;margin-bottom:16px">
+          <div style="display:flex;align-items:center;gap:8px;font-weight:600;color:var(--text-primary);margin-bottom:16px">
             <div style="width:10px;height:10px;border-radius:50%;background:var(--emerald-500)"></div> Actual Schedule
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;font-size:13px">
@@ -2686,10 +2686,10 @@ function renderSRFTab(project, projectSRFs) {
       <button class="btn-danger" id="add-srf-btn">${svgIcon('plus')} Add SRF Document</button>
     </div>
 
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;background:rgba(28,6,23,0.4);border:1px solid rgba(59,17,48,0.6);border-radius:var(--r-2xl);padding:20px;font-size:13px">
-      <div><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600">Development Descriptor</div><div style="font-weight:600;color:white;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${escHtml(srfItem.Developments || 'N/A')}</div></div>
+    <div class="timeline-block" style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;padding:20px;font-size:13px">
+      <div><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600">Development Descriptor</div><div style="font-weight:600;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${escHtml(srfItem.Developments || 'N/A')}</div></div>
       <div><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600">Requester User</div><div style="font-weight:600;color:var(--text-secondary)">${escHtml(srfItem.User || 'N/A')}</div></div>
-      <div><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600">Est. Mandays (FC/TC)</div><div style="font-weight:600;color:var(--text-secondary)">${srfItem.MandaysFC} FC + ${srfItem.MandaysTC} TC = <strong style="color:white">${srfItem.TotalMandays} Total</strong></div></div>
+      <div><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600">Est. Mandays (FC/TC)</div><div style="font-weight:600;color:var(--text-secondary)">${srfItem.MandaysFC} FC + ${srfItem.MandaysTC} TC = <strong style="color:var(--text-primary)">${srfItem.TotalMandays} Total</strong></div></div>
       <div><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600">Development Cost (INR)</div><div style="font-weight:700;color:var(--emerald-400)">${escHtml(formatCurrency(srfItem.Cost))}</div></div>
       <div style="grid-column:1/-1;padding-top:12px;border-top:1px solid var(--slate-850);display:flex;justify-content:space-between;align-items:center;font-size:12px">
         <div style="color:var(--text-muted)">Current Phase: <span style="padding:2px 8px;background:rgba(244,63,94,0.1);border:1px solid rgba(244,63,94,0.2);color:var(--rose-400);font-weight:700;border-radius:4px;text-transform:uppercase;font-size:10px;margin-left:6px">${escHtml(srfItem.Status)}</span></div>
@@ -2701,7 +2701,7 @@ function renderSRFTab(project, projectSRFs) {
     </div>
 
     <div class="space-y-3" style="overflow-x:auto">
-      <h4 style="font-size:12px;font-weight:700;color:white;display:flex;align-items:center;gap:8px;margin-bottom:12px">${svgIcon('clock', 'w-4 h-4')} SRF Tracker (Sequential Stepper)</h4>
+      <h4 style="font-size:12px;font-weight:700;color:var(--text-primary);display:flex;align-items:center;gap:8px;margin-bottom:12px">${svgIcon('clock', 'w-4 h-4')} SRF Tracker (Sequential Stepper)</h4>
       <div class="srf-pipeline-container" style="gap: 0">
         ${stepNodes}
       </div>
@@ -2810,13 +2810,13 @@ function renderTeam(container) {
     </div>`;
   }).join('');
 
-  const gradients = ['linear-gradient(to top, var(--brand-500), var(--brand-300))', 'linear-gradient(to top, var(--emerald-500), #2dd4bf)', 'linear-gradient(to top, #a855f7, #ec4899)'];
+  const solidColors = ['var(--brand-500)', 'var(--emerald-500)', '#a855f7'];
   const bars = teamList.slice(0, 10).map((m, i) => {
     const barH = Math.max(8, (m.projectCount / maxProjCount) * chartHeight);
-    const grad = gradients[i % 3];
+    const color = solidColors[i % 3];
     return `<div class="team-bar-item" style="width:${100 / Math.min(10, teamList.length)}%">
       <div class="team-tooltip">${m.projectCount} Projects | ${m.totalTasks} Tasks</div>
-      <div class="team-bar" style="height:${barH}px;background:${grad}"></div>
+      <div class="team-bar" style="height:${barH}px;background:${color}"></div>
       <span class="team-bar-label">${escHtml(m.name)}</span>
     </div>`;
   }).join('');
