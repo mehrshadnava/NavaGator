@@ -12,7 +12,6 @@ const state = {
   srfs: [],
   kaizens: [],
   isLoading: true,
-  theme: localStorage.getItem('tracker_theme') || 'dark',
 
   // Dashboard
   benefitsConverted: false,
@@ -100,6 +99,26 @@ function escHtml(str) {
 
 function svgIcon(name, cls = '') {
   return `<i data-lucide="${name}"${cls ? ` class="${cls}"` : ''}></i>`;
+}
+
+const _dynamicStylesMap = {};
+function setDynamicStyles(key, css) {
+  _dynamicStylesMap[key] = css;
+  let styleEl = document.getElementById('dynamic-app-styles');
+  if (!styleEl) {
+    styleEl = document.createElement('style');
+    styleEl.id = 'dynamic-app-styles';
+    document.head.appendChild(styleEl);
+  }
+  styleEl.innerHTML = Object.values(_dynamicStylesMap).join('\n');
+}
+
+function clearDynamicStyles(key) {
+  delete _dynamicStylesMap[key];
+  const styleEl = document.getElementById('dynamic-app-styles');
+  if (styleEl) {
+    styleEl.innerHTML = Object.values(_dynamicStylesMap).join('\n');
+  }
 }
 
 /* ============================================================
@@ -954,25 +973,6 @@ function showToast(message, type = 'success') {
   _toastTimer = setTimeout(() => { el.className = 'toast'; }, 3000);
 }
 
-/* ============================================================
-   8. THEME
-   ============================================================ */
-function applyTheme() {
-  const root = document.documentElement;
-  if (state.theme === 'dark') {
-    root.classList.add('dark');
-    root.classList.remove('light');
-  } else {
-    root.classList.add('light');
-    root.classList.remove('dark');
-  }
-  localStorage.setItem('tracker_theme', state.theme);
-  const btn = document.getElementById('theme-btn');
-  if (btn) {
-    btn.innerHTML = svgIcon(state.theme === 'dark' ? 'sun' : 'moon');
-    lucide.createIcons({ nodes: [btn] });
-  }
-}
 
 /* ============================================================
    9. NAVIGATION
@@ -1019,13 +1019,13 @@ function updateNav() {
   const deptSelect = document.getElementById('header-dept-filter');
   const showCreate = state.projects.length > 0 && state.currentView !== 'workspace';
   const showDept = state.projects.length > 0 && state.currentView === 'dashboard';
-  
+
   if (createBtn) {
-    createBtn.style.display = showCreate ? 'inline-flex' : 'none';
+    createBtn.classList.toggle('hidden', !showCreate);
   }
-  
+
   if (deptSelect) {
-    deptSelect.style.display = showDept ? 'inline-block' : 'none';
+    deptSelect.classList.toggle('hidden', !showDept);
     if (showDept) {
       const departments = [...new Set(state.projects.map(p => p.Department).filter(Boolean))].sort();
       let options = '<option value="">All Departments</option>';
@@ -1042,6 +1042,13 @@ function updateNav() {
    ============================================================ */
 function render() {
   updateNav();
+
+  const progressFillsCSS = state.projects.map(p => {
+    const cleanId = p.ID.replace(/\./g, '-');
+    return `.prog-fill-${cleanId} { width: ${p.Progress || 0}%; }`;
+  }).join('\n');
+  setDynamicStyles('project-progress-fills', progressFillsCSS);
+
   const container = document.getElementById('view-container');
   if (!container) return;
 
@@ -1049,7 +1056,7 @@ function render() {
     container.innerHTML = `
       <div class="loading-state">
         <div class="spinner"></div>
-        <span style="color:var(--text-muted);font-size:12px;font-weight:500">Mounting workspace spreadsheet...</span>
+        <span class="loading-text">Mounting workspace spreadsheet...</span>
       </div>`;
     return;
   }
@@ -1104,12 +1111,29 @@ function renderDashboard(container) {
   const deptList = Object.keys(deptCounts).sort((a, b) => deptCounts[b] - deptCounts[a]);
 
   const maxCount = Math.max(...Object.values(deptCounts), 1);
-  
+
+  // Generate dynamic styles for department bars and progresses
+  const deptFillsStyles = deptList.map(dept => {
+    const count = deptCounts[dept];
+    const pct = Math.round((count / maxCount) * 100);
+    const cleanDeptName = dept.replace(/\s+/g, '-').toLowerCase();
+    return `.dept-bar-fill-${cleanDeptName} { height: ${pct}%; }`;
+  }).join('\n');
+  setDynamicStyles('dept-chart-fills', deptFillsStyles);
+
+  const deptProgressFillsCSS = deptList.map(dept => {
+    const count = deptCounts[dept];
+    const ratio = Math.round((count / (state.projects.length || 1)) * 100);
+    const cleanDeptName = dept.replace(/\s+/g, '-').toLowerCase();
+    return `.dept-prog-fill-${cleanDeptName} { width: ${ratio}%; }`;
+  }).join('\n');
+  setDynamicStyles('dept-progress-fills', deptProgressFillsCSS);
+
   // Y-axis gridlines & ticks
   const yTicks = [maxCount, Math.round(maxCount * 0.75), Math.round(maxCount * 0.5), Math.round(maxCount * 0.25), 0];
-  const yAxisHTML = yTicks.map(val => `<div style="display:flex;align-items:center;height:0;position:relative;width:100%">
-    <span style="position:absolute;right:100%;margin-right:8px;font-size:9px;color:var(--text-dim);font-weight:700">${val}</span>
-    <div style="flex-grow:1;border-top:1px dashed rgba(255,255,255,0.06);width:100%"></div>
+  const yAxisHTML = yTicks.map(val => `<div class="chart-y-axis-row">
+    <span class="chart-y-axis-tick">${val}</span>
+    <div class="chart-y-axis-grid-line"></div>
   </div>`).join('');
 
   // Vertical Bars
@@ -1120,10 +1144,11 @@ function renderDashboard(container) {
     const barBg = isActive ? '#ec4899' : '#6366f1';
     const shadow = isActive ? '0 4px 12px rgba(236, 72, 153, 0.4)' : '0 2px 8px rgba(99, 102, 241, 0.15)';
     const border = isActive ? '1px solid #f472b6' : '1px solid #818cf8';
-    
-    return `<div class="dept-vertical-bar-col" data-dept="${escHtml(dept)}" style="display:flex;flex-direction:column;align-items:center;flex:1;cursor:pointer;height:100%;justify-content:end;min-width:40px">
-      <div style="width:20px;height:${pct}%;background:${barBg};border:${border};border-bottom:none;border-radius:4px 4px 0 0;position:relative;transition:all 0.3s ease;display:flex;align-items:start;justify-content:center;box-shadow:${shadow}" class="dept-bar-hover">
-        <span class="dept-bar-tooltip" style="position:absolute;bottom:100%;background:var(--slate-950);border:1px solid var(--slate-850);padding:2px 6px;border-radius:4px;font-size:9px;color:white;font-weight:700;margin-bottom:4px;opacity:0;transition:opacity 0.2s;white-space:nowrap;pointer-events:none;z-index:10">${count} proj</span>
+
+    const cleanDeptName = dept.replace(/\s+/g, '-').toLowerCase();
+    return `<div class="dept-vertical-bar-col" data-dept="${escHtml(dept)}">
+      <div class="dept-bar dept-bar-hover dept-bar-fill-${cleanDeptName} ${isActive ? 'active' : 'inactive'}">
+        <span class="dept-bar-tooltip">${count} proj</span>
       </div>
     </div>`;
   }).join('');
@@ -1131,8 +1156,8 @@ function renderDashboard(container) {
   // X-Axis Labels Row HTML (Perfect Center Alignment - Vertical)
   const deptChartLabelsHTML = deptList.map(dept => {
     const isActive = state.selectedDept === dept;
-    return `<div class="dept-vertical-bar-col" data-dept="${escHtml(dept)}" style="display:flex;flex-direction:column;align-items:center;flex:1;cursor:pointer;min-width:40px;height:100%;position:relative">
-      <div style="font-size:9px;color:${isActive ? 'white' : 'var(--text-dim)'};font-weight:700;margin-top:8px;text-transform:capitalize;white-space:nowrap;transform:rotate(90deg);transform-origin:left center;position:absolute;top:0;left:50%;margin-left:-4px" title="${escHtml(dept)}">${escHtml(dept)}</div>
+    return `<div class="dept-vertical-bar-col label-col" data-dept="${escHtml(dept)}">
+      <div class="dept-bar-label ${isActive ? 'active' : 'inactive'}" title="${escHtml(dept)}">${escHtml(dept)}</div>
     </div>`;
   }).join('');
 
@@ -1150,21 +1175,21 @@ function renderDashboard(container) {
     const projName = proj ? proj.Name : 'Unknown Project';
     return `<div class="srf-list-row">
       <div class="min-w-0 flex-1">
-        <div style="display:flex;align-items:center;gap:6px">
-          <span style="font-size:11px;font-weight:700;color:var(--brand-300);background:rgba(129,0,85,0.15);padding:2px 6px;border-radius:4px">${escHtml(s.SRFNo)}</span>
-          <span style="font-size:10px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px" title="${escHtml(projName)}">${escHtml(projName)}</span>
+        <div class="flex-center-gap-6">
+          <span class="srf-no-badge">${escHtml(s.SRFNo)}</span>
+          <span class="srf-proj-label" title="${escHtml(projName)}">${escHtml(projName)}</span>
         </div>
-        <div style="font-size:11px;color:var(--text-secondary);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(s.Developments)}">${escHtml(s.Developments || 'No developments scope logged.')}</div>
+        <div class="srf-developments-label" title="${escHtml(s.Developments)}">${escHtml(s.Developments || 'No developments scope logged.')}</div>
       </div>
-      <div style="display:flex;align-items:center;gap:24px;flex-shrink:0">
-        <div style="font-size:11px;color:var(--text-dim);text-align:right">
-          <div><strong style="color:var(--text-secondary)">${s.MandaysFC || 0}</strong> Functional</div>
-          <div><strong style="color:var(--text-secondary)">${s.MandaysTC || 0}</strong> Technical</div>
+      <div class="flex-center-gap-24-shrink-0">
+        <div class="srf-mandays-block">
+          <div><strong class="auto-style-color-var-1003">${s.MandaysFC || 0}</strong> Functional</div>
+          <div><strong class="auto-style-color-var-1003">${s.MandaysTC || 0}</strong> Technical</div>
         </div>
-        <div style="font-size:12px;font-weight:700;color:var(--rose-400);min-width:90px;text-align:right">${escHtml(formatCurrency(s.Cost || 0))}</div>
+        <div class="srf-cost-label">${escHtml(formatCurrency(s.Cost || 0))}</div>
       </div>
     </div>`;
-  }).join('') || `<div class="text-center py-12 text-dim" style="font-size:12px">No SRF contracts belong to this department filter.</div>`;
+  }).join('') || `<div class="text-center py-12 text-dim fs-12px">No SRF contracts belong to this department filter.</div>`;
 
   // Benefits breakdown
   const benefitRows = dp.filter(p => p.Benefits).map(p => {
@@ -1177,13 +1202,13 @@ function renderDashboard(container) {
       badgeClass = state.benefitsConverted ? 'badge badge-emerald' : 'badge badge-blue';
     }
     return `<div class="benefit-row" data-proj-id="${escHtml(p.ID)}">
-      <div class="min-w-0 flex-1" style="padding-right:12px">
-        <div style="font-size:12px;font-weight:600;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(p.Name)}</div>
-        <div style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.05em;margin-top:2px">${escHtml(p.Department)}</div>
+      <div class="min-w-0 flex-1 pr-12">
+        <div class="benefit-name">${escHtml(p.Name)}</div>
+        <div class="benefit-dept">${escHtml(p.Department)}</div>
       </div>
-      <span class="${badgeClass}" style="font-size:10px;padding:2px 10px">${badgeText}</span>
+      <span class="${badgeClass} benefit-badge">${badgeText}</span>
     </div>`;
-  }).join('') || `<div class="text-center py-8 text-dim" style="font-size:12px">No project benefits logged yet for this filter.</div>`;
+  }).join('') || `<div class="text-center py-8 text-dim fs-12px">No project benefits logged yet for this filter.</div>`;
 
   // Dept filter items
   const deptItems = deptList.map(dept => {
@@ -1191,11 +1216,11 @@ function renderDashboard(container) {
     const ratio = Math.round((count / (state.projects.length || 1)) * 100);
     const isActive = state.selectedDept === dept;
     return `<div class="dept-item ${isActive ? 'active' : ''}" data-dept="${escHtml(dept)}">
-      <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;font-weight:600">
-        <span style="text-transform:capitalize;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:150px" title="${escHtml(dept)}">${escHtml(dept)}</span>
-        <span style="font-size:10px;background:var(--slate-950);padding:2px 6px;border-radius:4px;border:1px solid var(--slate-850);color:var(--text-secondary);font-weight:700">${count} proj</span>
+      <div class="dept-item-header">
+        <span class="dept-item-name" title="${escHtml(dept)}">${escHtml(dept)}</span>
+        <span class="dept-item-count">${count} proj</span>
       </div>
-      <div class="dept-bar-track"><div class="dept-bar-fill" style="width:${ratio}%"></div></div>
+      <div class="dept-bar-track"><div class="dept-bar-fill dept-prog-fill-${dept.replace(/\s+/g, '-').toLowerCase()}"></div></div>
     </div>`;
   }).join('');
 
@@ -1204,45 +1229,45 @@ function renderDashboard(container) {
     const progressFill = p.Status === 'completed' ? 'var(--brand-500)' : p.Status === 'delayed' ? 'var(--amber-500)' : p.Status === 'at-risk' ? 'var(--rose-500)' : 'var(--emerald-500)';
     return `<div class="project-list-row" data-proj-id="${escHtml(p.ID)}">
       <div class="min-w-0 flex-1">
-        <div class="proj-name" style="font-size:12px;font-weight:700;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:color 0.2s">${escHtml(p.Name)}</div>
-        <div style="font-size:10px;color:var(--text-dim);margin-top:2px;text-transform:capitalize">PM: ${escHtml(p.ProjectManager || 'Unassigned')} • ${escHtml(p.Department)}</div>
+        <div class="proj-name proj-name-dashboard">${escHtml(p.Name)}</div>
+        <div class="proj-pm-dept-dashboard">PM: ${escHtml(p.ProjectManager || 'Unassigned')} • ${escHtml(p.Department)}</div>
       </div>
-      <div style="display:flex;align-items:center;gap:16px;flex-shrink:0">
-        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
-          <span style="font-size:10px;color:var(--text-muted)">Progress: <span style="font-weight:700;color:white">${p.Progress || 0}%</span></span>
-          <div class="progress-track h-1" style="width:80px"><div class="progress-fill" style="height:100%;border-radius:999px;background:${progressFill};width:${p.Progress || 0}%"></div></div>
+      <div class="project-list-actions">
+        <div class="project-list-progress-block">
+          <span class="proj-progress-label">Progress: <span class="text-white-bold">${p.Progress || 0}%</span></span>
+          <div class="progress-track h-1 w-80px"><div class="progress-fill prog-fill-${p.ID.replace(/\./g, '-')} ${p.Status}"></div></div>
         </div>
       </div>
     </div>`;
-  }).join('') || `<div class="text-center py-12 text-dim" style="font-size:12px">No projects belong to this department.</div>`;
+  }).join('') || `<div class="text-center py-12 text-dim fs-12px">No projects belong to this department.</div>`;
 
   container.innerHTML = `
   <div class="space-y-6 animate-fade-in">
     
     ${state.selectedDept ? `
     <div class="filter-banner">
-      <span style="display:flex;align-items:center;gap:8px">
+      <span class="flex-center-gap-8">
         ${svgIcon('building-2', 'w-4 h-4')}
-        Active Filter: <strong style="text-transform:capitalize;margin-left:4px">${escHtml(state.selectedDept)}</strong>&nbsp;Department (${total} projects)
+        Active Filter: <strong class="text-capitalize-ml-4">${escHtml(state.selectedDept)}</strong>&nbsp;Department (${total} projects)
       </span>
-      <button id="clear-dept-filter" style="padding:4px 10px;background:rgba(129,0,85,0.2);color:var(--brand-300);font-weight:700;border-radius:8px;border:1px solid rgba(129,0,85,0.3);cursor:pointer;font-size:11px;transition:all 0.2s">Clear Filter</button>
+      <button id="clear-dept-filter" class="clear-dept-filter-btn">Clear Filter</button>
     </div>` : ''}
 
     <!-- KPI Row -->
     <div class="grid grid-4">
-      <div class="glass-card kpi-card border-brand" style="border-radius:var(--r-2xl)">
+      <div class="glass-card kpi-card border-brand auto-style-border-radius-var-1004">
         <div class="kpi-icon brand">${svgIcon('folder-kanban')}</div>
         <div><div class="kpi-label">Total Projects</div><div class="kpi-value">${total}</div></div>
       </div>
-      <div class="glass-card kpi-card border-amber" style="border-radius:var(--r-2xl)">
+      <div class="glass-card kpi-card border-amber auto-style-border-radius-var-1004">
         <div class="kpi-icon amber">${svgIcon('play')}</div>
         <div><div class="kpi-label">Active Projects</div><div class="kpi-value">${active}</div></div>
       </div>
-      <div class="glass-card kpi-card border-emerald" style="border-radius:var(--r-2xl)">
+      <div class="glass-card kpi-card border-emerald auto-style-border-radius-var-1004">
         <div class="kpi-icon emerald">${svgIcon('check-circle-2')}</div>
         <div><div class="kpi-label">Completed Projects</div><div class="kpi-value">${completed}</div></div>
       </div>
-      <div class="glass-card kpi-card border-yellow" style="border-radius:var(--r-2xl)">
+      <div class="glass-card kpi-card border-yellow auto-style-border-radius-var-1004">
         <div class="kpi-icon yellow">${svgIcon('award')}</div>
         <div><div class="kpi-label">Kaizen Counts</div><div class="kpi-value">${kaizenCount}</div></div>
       </div>
@@ -1251,7 +1276,7 @@ function renderDashboard(container) {
     <!-- Health + Benefits Row -->
     <div class="grid grid-12">
       <!-- Portfolio Health -->
-      <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between min-h-350 col-span-5" style="border:1px solid var(--slate-900)">
+      <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between min-h-350 col-span-5 border-slate-900">
         <div>
           <h3 class="panel-title mb-6"><span class="dot"></span> Project Portfolio Health</h3>
           <div class="donut-wrap">
@@ -1264,15 +1289,15 @@ function renderDashboard(container) {
           </div>
         </div>
         <div class="legend-grid">
-          <div class="legend-item text-emerald"><span class="legend-dot" style="background:var(--emerald-500)"></span>On Track (${sc['on-track']})</div>
-          <div class="legend-item text-blue"><span class="legend-dot" style="background:var(--brand-500)"></span>Completed (${sc.completed})</div>
-          <div class="legend-item" style="color:var(--amber-400)"><span class="legend-dot" style="background:var(--amber-500)"></span>Delayed (${sc.delayed})</div>
-          <div class="legend-item" style="color:var(--rose-400)"><span class="legend-dot" style="background:var(--rose-500)"></span>At Risk (${sc['at-risk']})</div>
+          <div class="legend-item text-emerald"><span class="legend-dot auto-style-background-var-1005"></span>On Track (${sc['on-track']})</div>
+          <div class="legend-item text-blue"><span class="legend-dot auto-style-background-var-1006"></span>Completed (${sc.completed})</div>
+          <div class="legend-item auto-style-color-var-1007"><span class="legend-dot auto-style-background-var-1008"></span>Delayed (${sc.delayed})</div>
+          <div class="legend-item auto-style-color-var-1009"><span class="legend-dot btn-background-rose"></span>At Risk (${sc['at-risk']})</div>
         </div>
       </div>
 
       <!-- Benefits Widget -->
-      <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between min-h-350 col-span-7" style="border:1px solid var(--slate-900)">
+      <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between min-h-350 col-span-7 border-slate-900">
         <div class="space-y-4 w-full">
           <h3 class="panel-title">
             ${svgIcon('trending-up')} Project Benefits &amp; Savings
@@ -1281,21 +1306,21 @@ function renderDashboard(container) {
             <div class="benefit-kpi-card ${state.benefitsConverted ? 'active-emerald' : 'inactive'}" id="btn-convert-financial" title="Convert man-days to INR">
               <div class="benefit-kpi-icon ${state.benefitsConverted ? 'emerald' : 'muted'}">${svgIcon('indian-rupee')}</div>
               <div>
-                <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:var(--text-muted)">Financial Savings</div>
-                <div class="kpi-val" style="font-size:15px;font-weight:700;color:var(--text-primary);margin-top:2px">${escHtml(formatCurrency(displaySavings))}</div>
+                <div class="benefit-kpi-label">Financial Savings</div>
+                <div class="kpi-val benefit-kpi-val">${escHtml(formatCurrency(displaySavings))}</div>
               </div>
             </div>
             <div class="benefit-kpi-card ${!state.benefitsConverted ? 'active-brand' : 'inactive'}" id="btn-show-mandays" title="Show original man-days">
               <div class="benefit-kpi-icon ${!state.benefitsConverted ? 'brand' : 'muted'}">${svgIcon('calendar-days')}</div>
               <div>
-                <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:var(--text-muted)">Man-days Savings</div>
-                <div class="kpi-val" style="font-size:15px;font-weight:700;color:var(--text-primary);margin-top:2px">${displayMD} Days</div>
+                <div class="benefit-kpi-label">Man-days Savings</div>
+                <div class="kpi-val benefit-kpi-val">${displayMD} Days</div>
               </div>
             </div>
           </div>
           <div class="benefit-breakdown">${benefitRows}</div>
         </div>
-        <div style="font-size:10px;color:var(--text-dim);text-align:center;margin-top:12px;padding-top:8px;border-top:1px solid var(--slate-900);width:100%">
+        <div class="widget-footnote">
           * Click cards above to toggle conversion.
         </div>
       </div>
@@ -1304,51 +1329,51 @@ function renderDashboard(container) {
     <!-- Dept Filter + Project List Row -->
     <div class="grid grid-12">
       <!-- Departments Chart -->
-      <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between min-h-420 col-span-4" style="border:1px solid var(--slate-900)">
+      <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between min-h-420 col-span-4 border-slate-900">
         <div class="space-y-4 flex-1 flex flex-col">
-          <div style="display:flex;justify-content:space-between;align-items:center">
+          <div class="flex-between-center">
             <h3 class="panel-title">${svgIcon('bar-chart-3')} Department Analytics</h3>
-            ${state.selectedDept ? `<button id="clear-dept-filter2" style="font-size:12px;color:var(--brand-300);font-weight:700;background:none;border:none;cursor:pointer">Clear</button>` : ''}
+            ${state.selectedDept ? `<button id="clear-dept-filter2" class="clear-btn">Clear</button>` : ''}
           </div>
           
           <!-- Vertical Bar Chart Area -->
-          <div style="display:flex;flex-direction:column;flex:1;margin:20px auto 0;width:80%;height:260px;" class="hide-scrollbar">
+          <div class="dept-chart-wrapper hide-scrollbar">
             <!-- Bars & Gridlines Container -->
-            <div style="display:flex;position:relative;height:150px;width:100%">
+            <div class="dept-chart-plot-area">
               <!-- Y-Axis Solid Line -->
-              <div style="position:absolute;left:0;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.15);z-index:5">
-                <span style="position:absolute;bottom:100%;left:-20px;font-size:8px;color:var(--text-muted);font-weight:700;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em">Count</span>
+              <div class="auto-style-position-absolute-left-0-top-0-bottom-0--1010">
+                <span class="auto-style-position-absolute-bottom-100-left-20px-f-1011">Count</span>
               </div>
               <!-- Y-Axis Gridlines -->
-              <div style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;flex-direction:column;justify-content:space-between;pointer-events:none">
+              <div class="auto-style-position-absolute-top-0-left-0-right-0-b-1012">
                 ${yAxisHTML}
               </div>
               <!-- Bars Flex Row -->
-              <div style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;justify-content:space-around;align-items:end;height:100%;padding:0 8px">
+              <div class="auto-style-position-absolute-top-0-left-0-right-0-b-1013">
                 ${deptChartHTML}
               </div>
             </div>
             <!-- X-Axis Labels Row -->
-            <div style="display:flex;justify-content:space-around;height:100px;padding:0 8px;margin-top:8px;border-top:1px solid rgba(255,255,255,0.15);position:relative">
+            <div class="chart-labels-container">
               ${deptChartLabelsHTML}
             </div>
           </div>
         </div>
-        <div style="font-size:10px;color:var(--text-dim);text-align:center;margin-top:12px;padding-top:8px;border-top:1px solid var(--slate-900)">
+        <div class="widget-footnote-no-width">
           Click bars to filter active views &amp; projects
         </div>
       </div>
 
       <!-- Projects List -->
-      <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between min-h-420 col-span-8" style="border:1px solid var(--slate-900)">
+      <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between min-h-420 col-span-8 border-slate-900">
         <div class="space-y-4 flex-1 flex flex-col">
           <h3 class="panel-title">
             ${svgIcon('folder-kanban')}
-            ${state.selectedDept ? `Projects in <span style="color:var(--brand-300);text-transform:capitalize;margin-left:4px">${escHtml(state.selectedDept)}</span>` : 'All Active Projects Registry'}
+            ${state.selectedDept ? `Projects in <span class="auto-style-color-var-text-transform-capitalize-marg-1014">${escHtml(state.selectedDept)}</span>` : 'All Active Projects Registry'}
           </h3>
-          <div style="display:flex;flex-direction:column;gap:8px;max-height:310px;overflow-y:auto;padding-right:4px">${projRows}</div>
+          <div class="dashboard-projects-container">${projRows}</div>
         </div>
-        <div style="font-size:10px;color:var(--text-dim);text-align:center;margin-top:12px;padding-top:8px;border-top:1px solid var(--slate-900)">
+        <div class="widget-footnote-no-width">
           Click on any project card to open its workspace
         </div>
       </div>
@@ -1357,37 +1382,37 @@ function renderDashboard(container) {
     <!-- SRF Cost Overview Row -->
     <div class="grid grid-12">
       <!-- SRF Total Cost Widget -->
-      <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between min-h-350 col-span-4" style="border:1px solid var(--slate-900); background: var(--slate-950);">
+      <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between min-h-350 col-span-4 border-slate-900">
         <div>
-          <h3 class="panel-title" style="margin-bottom: 20px; display: flex; align-items: center; gap: 8px;">
-            <span style="color: var(--rose-400); display: flex; align-items: center;">${svgIcon('credit-card', 'w-4 h-4')}</span> 
+          <h3 class="panel-title srf-panel-title">
+            <span class="srf-title-icon">${svgIcon('credit-card', 'w-4 h-4')}</span> 
             SRF Cost Summary
           </h3>
           
           <!-- Highlighted Total Cost Circle (Solid Background) -->
-          <div style="width: 220px; height: 220px; border-radius: 50%; background: #120911; border: 2px solid #f43f5e; box-shadow: 0 4px 15px rgba(244, 63, 94, 0.15); display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 8px auto 0; text-align: center; padding: 20px;">
-            <div style="font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700;">Total SRF Investment</div>
-            <div style="font-size: 28px; font-weight: 800; color: white; margin-top: 8px; letter-spacing: -0.02em; display: flex; align-items: center; justify-content: center; gap: 4px;">
-              <span style="color: var(--rose-400); font-weight: 400; font-size: 20px;">₹</span>${escHtml(formatCurrency(srfTotalCost).replace('₹', '').replace('Rs.', '').trim())}
+          <div class="srf-total-circle">
+            <div class="srf-circle-label">Total SRF Investment</div>
+            <div class="srf-circle-value">
+              <span class="srf-circle-currency">₹</span>${escHtml(formatCurrency(srfTotalCost).replace('₹', '').replace('Rs.', '').trim())}
             </div>
           </div>
         </div>
         
-        <div style="font-size: 10px; color: var(--text-muted); text-align: center; margin-top: 16px; padding-top: 8px; border-top: 1px solid var(--slate-900)">
+        <div class="srf-cost-widget-footnote">
           Sum of linked SRFs (filtered by department)
         </div>
       </div>
 
       <!-- SRF List -->
-      <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between min-h-350 col-span-8" style="border:1px solid var(--slate-900)">
+      <div class="glass-panel rounded-2xl p-6 flex flex-col justify-between min-h-350 col-span-8 border-slate-900">
         <div class="space-y-4 flex-1 flex flex-col">
           <h3 class="panel-title">
             ${svgIcon('file-spreadsheet')}
-            ${state.selectedDept ? `SRF Registry in <span style="color:var(--brand-300);text-transform:capitalize;margin-left:4px">${escHtml(state.selectedDept)}</span>` : 'All Linked SRF Registry'}
+            ${state.selectedDept ? `SRF Registry in <span class="auto-style-color-var-text-transform-capitalize-marg-1014">${escHtml(state.selectedDept)}</span>` : 'All Linked SRF Registry'}
           </h3>
-          <div style="display:flex;flex-direction:column;gap:8px;max-height:220px;overflow-y:auto;padding-right:4px">${srfRows}</div>
+          <div class="srf-list-container">${srfRows}</div>
         </div>
-        <div style="font-size:10px;color:var(--text-dim);text-align:center;margin-top:12px;padding-top:8px;border-top:1px solid var(--slate-900)">
+        <div class="widget-footnote-no-width">
           Lists linked contract deliverables, cost, and manday profiles
         </div>
       </div>
@@ -1462,13 +1487,13 @@ function updateBenefitsUI(converted) {
         badgeClass = converted ? 'badge badge-emerald' : 'badge badge-blue';
       }
       return `<div class="benefit-row" data-proj-id="${escHtml(p.ID)}">
-        <div class="min-w-0 flex-1" style="padding-right:12px">
-          <div style="font-size:12px;font-weight:600;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(p.Name)}</div>
-          <div style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.05em;margin-top:2px">${escHtml(p.Department)}</div>
+        <div class="min-w-0 flex-1 pr-12">
+          <div class="benefit-name">${escHtml(p.Name)}</div>
+          <div class="benefit-dept">${escHtml(p.Department)}</div>
         </div>
-        <span class="${badgeClass}" style="font-size:10px;padding:2px 10px">${badgeText}</span>
+        <span class="${badgeClass} benefit-badge">${badgeText}</span>
       </div>`;
-    }).join('') || `<div class="text-center py-8 text-dim" style="font-size:12px">No project benefits logged yet for this filter.</div>`;
+    }).join('') || `<div class="text-center py-8 text-dim fs-12px">No project benefits logged yet for this filter.</div>`;
     breakdown.innerHTML = benefitRows;
 
     breakdown.querySelectorAll('.benefit-row').forEach(el => {
@@ -1479,7 +1504,7 @@ function updateBenefitsUI(converted) {
 
 function buildDonutSVG(sc, total) {
   if (total === 0) {
-    return `<svg class="w-full h-full" viewBox="0 0 36 36" style="transform:rotate(-90deg)">
+    return `<svg class="w-full h-full" viewBox="0 0 36 36" class="auto-style-transform-rotate-90deg-1015">
       <circle cx="18" cy="18" r="15.915" fill="none" stroke="#1c0617" stroke-width="3"/>
     </svg>`;
   }
@@ -1499,7 +1524,7 @@ function buildDonutSVG(sc, total) {
       stroke-dashoffset="${-offset}"/>`;
     offset += pct;
   });
-  return `<svg class="w-full h-full" viewBox="0 0 36 36" style="transform:rotate(-90deg)">${paths}</svg>`;
+  return `<svg class="w-full h-full" viewBox="0 0 36 36" class="auto-style-transform-rotate-90deg-1015">${paths}</svg>`;
 }
 
 /* ============================================================
@@ -1536,48 +1561,49 @@ function getProjectCardsHTML() {
     const projectKaizens = state.kaizens.filter(k => k.ProjectID === proj.ID);
     const hasKaizen = projectKaizens.length > 0;
     const kaizenClass = hasKaizen ? 'kaizen' : '';
+    const completedClass = proj.Status === 'completed' ? 'completed-project' : '';
 
-    return `<div class="glass-card project-card ${kaizenClass}" data-proj-id="${escHtml(proj.ID)}" style="border-radius:var(--r-2xl)">
-      <div style="display:flex;flex-direction:column;gap:8px">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
-          <div style="display:flex;gap:6px;align-items:center">
-            <span style="padding:2px 8px;background:var(--slate-800);border:1px solid var(--slate-700);font-size:10px;color:var(--text-muted);border-radius:6px;font-weight:600;text-transform:uppercase;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px">${escHtml(proj.Department)}</span>
-            ${hasKaizen ? `<span style="padding:2px 6px;background:rgba(212,175,55,0.15);border:1px solid rgba(212,175,55,0.3);font-size:10px;color:#ffd700;border-radius:6px;font-weight:700;display:flex;align-items:center;gap:2px">${svgIcon('award')} Kaizen (${projectKaizens.length})</span>` : ''}
+    return `<div class="glass-card project-card ${kaizenClass} ${completedClass} auto-style-border-radius-var-1004" data-proj-id="${escHtml(proj.ID)}">
+      <div class="auto-style-display-flex-flex-direction-column-gap-8-1016">
+        <div class="auto-style-display-flex-justify-content-space-betwe-1017">
+          <div class="auto-style-display-flex-gap-6px-align-items-center-1018">
+            <span class="project-card-dept-badge">${escHtml(proj.Department)}</span>
+            ${hasKaizen ? `<span class="project-card-kaizen-badge">${svgIcon('award')} Kaizen (${projectKaizens.length})</span>` : ''}
           </div>
           <span class="badge ${statusClass}">${escHtml(statusText)}</span>
         </div>
-        <h3 class="project-card-name" style="font-size:14px;font-weight:700;color:white;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:color 0.2s">${escHtml(proj.Name)}</h3>
-        <p style="color:var(--text-muted);font-size:12px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;line-height:1.5">${escHtml(proj.Description || 'No description provided.')}</p>
+        <h3 class="project-card-name project-card-name">${escHtml(proj.Name)}</h3>
+        <p class="project-card-description">${escHtml(proj.Description || 'No description provided.')}</p>
       </div>
 
-      <div style="display:flex;flex-direction:column;gap:12px;margin:12px 0">
+      <div class="auto-style-display-flex-flex-direction-column-gap-1-1019">
         <div>
-          <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:4px">
-            <span style="color:var(--text-muted)">Project Progress</span>
-            <span style="font-weight:700;color:white">${proj.Progress || 0}%</span>
+          <div class="flex-between-fs-10-mb-4">
+            <span class="text-muted">Project Progress</span>
+            <span class="text-white-bold">${proj.Progress || 0}%</span>
           </div>
-          <div class="progress-track h-2"><div class="progress-fill" style="height:100%;border-radius:999px;background:${progressColor};width:${proj.Progress || 0}%;transition:width 0.5s ease"></div></div>
+          <div class="progress-track h-2"><div class="progress-fill prog-fill-${proj.ID.replace(/\./g, '-')} ${proj.Status} transition-width-05s"></div></div>
         </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:var(--text-muted)">
-          <span style="display:flex;align-items:center;gap:4px">${svgIcon('calendar')} Timeline:</span>
-          <span style="font-weight:600;color:var(--text-secondary)">${formatDate(proj.PlannedStartDate)} – ${formatDate(proj.PlannedEndDate)}</span>
+        <div class="flex-between-center-fs-10-color-muted">
+          <span class="flex-center-gap-4">${svgIcon('calendar')} Timeline:</span>
+          <span class="text-secondary-semibold">${formatDate(proj.PlannedStartDate)} – ${formatDate(proj.PlannedEndDate)}</span>
         </div>
       </div>
 
-      <div style="display:flex;justify-content:space-between;align-items:center;padding-top:12px;border-top:1px solid rgba(59,17,48,0.6);font-size:12px">
-        <div style="display:flex;align-items:center;gap:6px;color:var(--text-secondary)">
-          <div style="width:24px;height:24px;border-radius:50%;background:var(--slate-800);border:1px solid var(--slate-700);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--brand-400)">${escHtml(initials)}</div>
-          <span style="font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:90px">${escHtml(proj.ProjectManager || 'Unassigned')}</span>
+      <div class="project-card-footer">
+        <div class="flex-center-gap-6-color-secondary">
+          <div class="project-card-pm-avatar">${escHtml(initials)}</div>
+          <span class="project-card-pm-name">${escHtml(proj.ProjectManager || 'Unassigned')}</span>
         </div>
-        <div style="display:flex;align-items:center;gap:8px">
-          ${proj.Benefits ? `<span style="display:flex;align-items:center;gap:4px;color:var(--emerald-400);background:rgba(16,185,129,0.1);padding:4px 8px;border-radius:6px;font-size:10px;font-weight:600;border:1px solid rgba(16,185,129,0.2);margin-left:12px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${svgIcon('trending-up')} ${escHtml(proj.Benefits)}</span>` : ''}
+        <div class="flex-center-gap-8">
+          ${proj.Benefits ? `<span class="project-card-benefits-badge">${svgIcon('trending-up')} ${escHtml(proj.Benefits)}</span>` : ''}
         </div>
       </div>
     </div>`;
-  }).join('') : `<div class="col-span-3" style="text-align:center;padding:80px;background:rgba(28,6,23,0.3);border:1px dashed var(--slate-800);border-radius:var(--r-2xl)">
+  }).join('') : `<div class="col-span-3 kaizen-empty-panel">
     ${svgIcon('folder-kanban', 'w-12 h-12')}
-    <h3 style="color:white;font-size:15px;font-weight:700;margin-top:12px">No projects found</h3>
-    <p style="color:var(--text-dim);font-size:12px;margin-top:4px">Adjust search queries or filters to explore other items.</p>
+    <h3 class="kaizen-empty-title">No projects found</h3>
+    <p class="kaizen-empty-desc">Adjust search queries or filters to explore other items.</p>
   </div>`;
 }
 
@@ -1587,16 +1613,16 @@ function renderProjects(container) {
 
   container.innerHTML = `
   <div class="space-y-6 animate-fade-in">
-    <div class="glass-panel rounded-2xl p-4" style="display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;align-items:center">
+    <div class="glass-panel rounded-2xl p-4 flex-wrap-gap-16-between-center">
       <div class="search-bar">
         ${svgIcon('search')}
         <input type="text" id="proj-search" placeholder="Search projects, PMs..." value="${escHtml(state.projectSearch)}">
       </div>
-      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px">
+      <div class="flex-wrap-center-gap-12">
         <div class="filter-select-wrap">${svgIcon('filter')}
           <select id="proj-dept-filter">
             <option value="">All Departments</option>
-            ${departments.map(d => `<option value="${escHtml(d)}" ${state.projectDeptFilter === d ? 'selected' : ''} style="text-transform:capitalize">${escHtml(d)}</option>`).join('')}
+            ${departments.map(d => `<option value="${escHtml(d)}" ${state.projectDeptFilter === d ? 'selected' : ''} class="auto-style-text-transform-capitalize-1020">${escHtml(d)}</option>`).join('')}
           </select>
         </div>
         <div class="filter-select-wrap">${svgIcon('briefcase')}
@@ -1616,7 +1642,7 @@ function renderProjects(container) {
             <option value="savings" ${state.projectSortBy === 'savings' ? 'selected' : ''}>Sort by Savings</option>
           </select>
         </div>
-        <button class="btn-ghost" id="clear-filters-btn" style="padding:8px 16px;border-radius:var(--r-lg);font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;transition:all 0.2s">
+        <button class="btn-ghost" id="clear-filters-btn" class="btn-clear-filters">
           ${svgIcon('filter-x')} <span>Clear Filters</span>
         </button>
       </div>
@@ -1651,19 +1677,19 @@ function renderWorkspace(container) {
   <div class="space-y-6 animate-fade-in">
 
     <!-- Workspace Header -->
-    <div class="glass-panel rounded-2xl p-5" style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:16px">
-      <div style="display:flex;align-items:center;gap:16px">
+    <div class="glass-panel rounded-2xl p-5 ws-header-row">
+      <div class="flex-center-gap-16">
         <button class="btn-icon" id="ws-back-btn" title="Back to projects">${svgIcon('arrow-left')}</button>
         <div>
-          <h2 style="font-size:20px;font-weight:700;color:var(--text-primary);margin-bottom:6px">${escHtml(project.Name)}</h2>
-          <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-muted);text-transform:capitalize">
-            <span style="font-weight:600;color:var(--text-secondary);background:var(--slate-850);padding:2px 8px;border-radius:6px;border:1px solid var(--slate-800)">${escHtml(project.Department)}</span>
+          <h2 class="workspace-project-title">${escHtml(project.Name)}</h2>
+          <div class="workspace-project-meta-row">
+            <span class="workspace-project-dept-badge">${escHtml(project.Department)}</span>
             <span>•</span>
-            <span style="display:flex;align-items:center;gap:4px">${svgIcon('user')} PM: ${escHtml(project.ProjectManager || 'Unassigned')}</span>
+            <span class="flex-center-gap-4">${svgIcon('user')} PM: ${escHtml(project.ProjectManager || 'Unassigned')}</span>
           </div>
         </div>
       </div>
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <div class="flex-center-gap-8-wrap">
         <button class="btn-ghost" id="ws-edit-btn">${svgIcon('edit-3')} Edit Project</button>
         <button class="btn-danger" id="ws-delete-btn">${svgIcon('trash-2')} Delete</button>
       </div>
@@ -1671,7 +1697,7 @@ function renderWorkspace(container) {
 
     ${project.Description ? `
     <div class="glass-card desc-panel">
-      <h4 style="font-size:10px;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px;display:flex;align-items:center;gap:4px">${svgIcon('info', 'w-3.5 h-3.5')} Project Scope / Description</h4>
+      <h4 class="workspace-project-scope-header">${svgIcon('info', 'w-3.5 h-3.5')} Project Scope / Description</h4>
       ${escHtml(project.Description)}
     </div>` : ''}
 
@@ -1696,6 +1722,21 @@ function renderWorkspace(container) {
 }
 
 function renderOverviewTab(project, projectTasks, projectSRFs) {
+  const taskIdsCheck = projectTasks.map(t => t.ID);
+  const leafTasksCheck = projectTasks.filter(t => !taskIdsCheck.some(otherId => otherId.startsWith(t.ID + '.')));
+  const inHouseCostCheck = leafTasksCheck.filter(t => !String(t.Assignee).toLowerCase().includes('gitl')).reduce((s, t) => s + (t.Progress * 1500), 0);
+  const gitlCostCheck = projectSRFs.reduce((s, sr) => s + (sr.Cost || 0), 0);
+  const totalSpendingCheck = inHouseCostCheck + gitlCostCheck;
+  const totalAllocCheck = totalSpendingCheck || 1;
+  const inHousePctCheck = Math.round((inHouseCostCheck / totalAllocCheck) * 100);
+  const gitlPctCheck = Math.round((gitlCostCheck / totalAllocCheck) * 100);
+
+  const overviewCSS = `
+    .alloc-segment-inhouse { width: ${inHousePctCheck}%; }
+    .alloc-segment-gitl { width: ${gitlPctCheck}%; }
+  `;
+  setDynamicStyles('workspace-overview', overviewCSS);
+
   const taskIds = projectTasks.map(t => t.ID);
   const leafTasks = projectTasks.filter(t => !taskIds.some(otherId => otherId.startsWith(t.ID + '.')));
   const inHouseCost = leafTasks.filter(t => !String(t.Assignee).toLowerCase().includes('gitl')).reduce((s, t) => s + (t.Progress * 1500), 0);
@@ -1709,9 +1750,9 @@ function renderOverviewTab(project, projectTasks, projectSRFs) {
   return `<div class="grid grid-3 animate-slide-up">
     <!-- Progress Gauge -->
     <div class="glass-panel rounded-2xl p-5 flex flex-col items-center justify-between min-h-300 text-center">
-      <div style="width:100%;text-align:left"><h3 style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em">Completion Progress</h3></div>
-      <div class="donut-container" style="width:160px;height:160px;margin:12px 0">
-        <svg class="w-full h-full" viewBox="0 0 36 36" style="transform:rotate(-90deg)">
+      <div class="w-full-text-left"><h3 class="overview-tab-card-title">Completion Progress</h3></div>
+      <div class="donut-container overview-donut-size">
+        <svg class="w-full h-full" viewBox="0 0 36 36" class="auto-style-transform-rotate-90deg-1015">
           <circle cx="18" cy="18" r="16" fill="none" stroke="var(--slate-800)" stroke-width="2.5"/>
           <circle cx="18" cy="18" r="16" fill="none" stroke="${progressColor}" stroke-width="3" stroke-dasharray="${project.Progress || 0} 100" stroke-linecap="round"/>
         </svg>
@@ -1719,14 +1760,14 @@ function renderOverviewTab(project, projectTasks, projectSRFs) {
           <span class="count">${project.Progress || 0}%</span>
         </div>
       </div>
-      <div class="glass-card" style="width:100%;border-radius:var(--r-xl);padding:12px;font-size:12px;text-align:left;display:flex;flex-direction:column;gap:8px">
-        <div style="display:flex;justify-content:space-between">
-          <span style="color:var(--text-dim)">Leaf Activity:</span>
-          <span style="color:var(--text-primary);font-weight:700">${leafTasks.length}</span>
+      <div class="glass-card overview-stats-card">
+        <div class="flex-between">
+          <span class="text-dim">Leaf Activity:</span>
+          <span class="color-text-primary-bold">${leafTasks.length}</span>
         </div>
-        <div style="display:flex;justify-content:space-between">
-          <span style="color:var(--text-dim)">Completed Tasks:</span>
-          <span style="color:var(--emerald-400);font-weight:700">${leafTasks.filter(t => (t.Progress || 0) === 100).length}</span>
+        <div class="flex-between">
+          <span class="text-dim">Completed Tasks:</span>
+          <span class="color-emerald-bold">${leafTasks.filter(t => (t.Progress || 0) === 100).length}</span>
         </div>
       </div>
     </div>
@@ -1734,53 +1775,53 @@ function renderOverviewTab(project, projectTasks, projectSRFs) {
     <!-- Financial Overview (Redesigned: Benefits Highlighted, Spendings Subtle) -->
     <div class="glass-panel rounded-2xl p-5 flex flex-col justify-between col-span-2 min-h-300">
       <div>
-        <h3 style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:16px">Project Cost Study &amp; Benefits</h3>
+        <h3 class="cost-panel-title">Project Cost Study &amp; Benefits</h3>
         
         <!-- Highly Highlighted Benefits Banner (Status Removed) -->
-        <div style="background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.18);border-radius:var(--r-xl);padding:16px;display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+        <div class="benefit-banner-card">
           <div>
-            <div style="font-size:9px;color:var(--emerald-400);text-transform:uppercase;letter-spacing:0.08em;font-weight:700">Project Benefit Output</div>
-            <div style="font-size:24px;font-weight:800;color:white;margin-top:4px;display:flex;align-items:center;gap:8px">
-              <span style="color:var(--emerald-400);display:flex;align-items:center">${svgIcon('trending-up', 'w-7 h-7')}</span>
+            <div class="overview-benefit-badge-title">Project Benefit Output</div>
+            <div class="overview-benefit-value-row">
+              <span class="overview-benefit-icon-span">${svgIcon('trending-up', 'w-7 h-7')}</span>
               ${escHtml(project.Benefits || 'N/A')}
             </div>
           </div>
         </div>
 
         <!-- Subtle Spendings Panels (Redesigned Grid Cards) -->
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px">
-          <div class="glass-card" style="padding:14px;border-radius:12px;display:flex;align-items:center;gap:12px">
-            <div style="width:32px;height:32px;border-radius:50%;background:rgba(129,0,85,0.15);color:var(--brand-400);display:flex;align-items:center;justify-content:center">${svgIcon('credit-card', 'w-4 h-4')}</div>
+        <div class="grid-three-col">
+          <div class="glass-card overview-spending-card">
+            <div class="overview-spending-card-icon-wrap">${svgIcon('credit-card', 'w-4 h-4')}</div>
             <div>
-              <div style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.06em;font-weight:700">Total Spending</div>
-              <div style="font-size:14px;font-weight:800;color:var(--text-primary);margin-top:2px">${escHtml(formatCurrency(totalSpending))}</div>
+              <div class="overview-spending-kpi-label">Total Spending</div>
+              <div class="overview-spending-kpi-value">${escHtml(formatCurrency(totalSpending))}</div>
             </div>
           </div>
-          <div class="glass-card" style="padding:14px;border-radius:12px;display:flex;align-items:center;gap:12px">
-            <div style="width:32px;height:32px;border-radius:50%;background:rgba(59,130,246,0.1);color:var(--blue-400);display:flex;align-items:center;justify-content:center">${svgIcon('users', 'w-4 h-4')}</div>
+          <div class="glass-card overview-spending-card">
+            <div class="overview-spending-card-icon-wrap-blue">${svgIcon('users', 'w-4 h-4')}</div>
             <div>
-              <div style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.06em;font-weight:700">In-House Cost</div>
-              <div style="font-size:14px;font-weight:800;color:var(--text-primary);margin-top:2px">${escHtml(formatCurrency(inHouseCost))}</div>
+              <div class="overview-spending-kpi-label">In-House Cost</div>
+              <div class="overview-spending-kpi-value">${escHtml(formatCurrency(inHouseCost))}</div>
             </div>
           </div>
-          <div class="glass-card" style="padding:14px;border-radius:12px;display:flex;align-items:center;gap:12px">
-            <div style="width:32px;height:32px;border-radius:50%;background:rgba(244,63,94,0.1);color:var(--rose-400);display:flex;align-items:center;justify-content:center">${svgIcon('file-spreadsheet', 'w-4 h-4')}</div>
+          <div class="glass-card overview-spending-card">
+            <div class="overview-spending-card-icon-wrap-rose">${svgIcon('file-spreadsheet', 'w-4 h-4')}</div>
             <div>
-              <div style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.06em;font-weight:700">GITL / SRF Cost</div>
-              <div style="font-size:14px;font-weight:800;color:var(--rose-400);margin-top:2px">${escHtml(formatCurrency(gitlCost))}</div>
+              <div class="overview-spending-kpi-label">GITL / SRF Cost</div>
+              <div class="overview-spending-kpi-value-rose">${escHtml(formatCurrency(gitlCost))}</div>
             </div>
           </div>
         </div>
 
         <!-- Allocation Breakdown Bar -->
-        <div style="margin-top:18px">
-          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted);margin-bottom:6px">
+        <div class="mt-18px">
+          <div class="cost-breakdown-label-row">
             <span>Project Resource Allocation Breakdown</span>
             <span>Total Allocated: ${escHtml(formatCurrency(inHouseCost + gitlCost))}</span>
           </div>
           <div class="allocation-bar">
-            ${inHouseCost > 0 ? `<div class="allocation-segment" style="width:${inHousePct}%;background:var(--brand-500)" title="In-House: ${formatCurrency(inHouseCost)}">In-House</div>` : ''}
-            ${gitlCost > 0 ? `<div class="allocation-segment" style="width:${gitlPct}%;background:var(--rose-500)" title="GITL: ${formatCurrency(gitlCost)}">GITL</div>` : ''}
+            ${inHouseCost > 0 ? `<div class="allocation-segment alloc-segment-inhouse bg-brand-500" title="In-House: ${formatCurrency(inHouseCost)}">In-House</div>` : ''}
+            ${gitlCost > 0 ? `<div class="allocation-segment alloc-segment-gitl bg-rose-500" title="GITL: ${formatCurrency(gitlCost)}">GITL</div>` : ''}
           </div>
         </div>
       </div>
@@ -1788,24 +1829,24 @@ function renderOverviewTab(project, projectTasks, projectSRFs) {
 
     <!-- Timelines -->
     <div class="glass-panel rounded-2xl p-5 col-span-3 space-y-4">
-      <h3 style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em">Project Timeline Study</h3>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">
+      <h3 class="overview-tab-card-title">Project Timeline Study</h3>
+      <div class="grid-two-col-timeline">
         <div class="timeline-block">
-          <div style="display:flex;align-items:center;gap:8px;font-weight:600;color:var(--text-primary);margin-bottom:16px">
-            <div style="width:10px;height:10px;border-radius:50%;background:var(--blue-500)"></div> Planned Schedule
+          <div class="timeline-block-header">
+            <div class="timeline-indicator-blue"></div> Planned Schedule
           </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;font-size:13px">
-            <div><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600">Planned Start</div><div style="color:var(--text-secondary);margin-top:2px">${formatDate(project.PlannedStartDate)}</div></div>
-            <div><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600">Planned End</div><div style="color:var(--text-secondary);margin-top:2px">${formatDate(project.PlannedEndDate)}</div></div>
+          <div class="timeline-details-grid">
+            <div><div class="timeline-detail-label">Planned Start</div><div class="timeline-detail-val">${formatDate(project.PlannedStartDate)}</div></div>
+            <div><div class="timeline-detail-label">Planned End</div><div class="timeline-detail-val">${formatDate(project.PlannedEndDate)}</div></div>
           </div>
         </div>
         <div class="timeline-block">
-          <div style="display:flex;align-items:center;gap:8px;font-weight:600;color:var(--text-primary);margin-bottom:16px">
-            <div style="width:10px;height:10px;border-radius:50%;background:var(--emerald-500)"></div> Actual Schedule
+          <div class="timeline-block-header">
+            <div class="timeline-indicator-emerald"></div> Actual Schedule
           </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;font-size:13px">
-            <div><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600">Actual Start</div><div style="color:var(--text-secondary);margin-top:2px">${formatDate(project.ActualStartDate)}</div></div>
-            <div><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600">Actual End</div><div style="color:var(--text-secondary);margin-top:2px">${formatDate(project.ActualEndDate)}</div></div>
+          <div class="timeline-details-grid">
+            <div><div class="timeline-detail-label">Actual Start</div><div class="timeline-detail-val">${formatDate(project.ActualStartDate)}</div></div>
+            <div><div class="timeline-detail-label">Actual End</div><div class="timeline-detail-val">${formatDate(project.ActualEndDate)}</div></div>
           </div>
         </div>
       </div>
@@ -1817,6 +1858,7 @@ function buildTimeHeaderHtml(minDate, maxDate, scale, pxPerDay) {
   const topCells = [];
   const bottomCells = [];
   const gridLines = [];
+  let headerCSS = '';
 
   const start = new Date(minDate);
   const end = new Date(maxDate);
@@ -1832,10 +1874,12 @@ function buildTimeHeaderHtml(minDate, maxDate, scale, pxPerDay) {
       const left = dayIndex * pxPerDay;
       const dayNum = current.getDate();
       const isWeekend = current.getDay() === 0 || current.getDay() === 6;
-      const weekendStyle = isWeekend ? 'background:rgba(244,63,94,0.07);' : '';
-      bottomCells.push(`<div class="gantt-time-col-bottom" style="left:${left}px;width:${pxPerDay}px;justify-content:center;padding:0;${weekendStyle}">${dayNum}</div>`);
 
-      gridLines.push(`<div class="gantt-grid-line" style="left:${left}px;width:${pxPerDay}px;border-right:1px solid rgba(255,255,255,0.06);${isWeekend ? 'background:rgba(244,63,94,0.05);' : ''}"></div>`);
+      bottomCells.push(`<div class="gantt-time-col-bottom g-tcb-${dayIndex} ${isWeekend ? 'weekend' : ''}">${dayNum}</div>`);
+      headerCSS += `.g-tcb-${dayIndex} { left: ${left}px; width: ${pxPerDay}px; }\n`;
+
+      gridLines.push(`<div class="gantt-grid-line g-gl-${dayIndex} ${isWeekend ? 'weekend' : ''}"></div>`);
+      headerCSS += `.g-gl-${dayIndex} { left: ${left}px; width: ${pxPerDay}px; }\n`;
 
       const next = new Date(current);
       next.setDate(next.getDate() + 1);
@@ -1843,7 +1887,8 @@ function buildTimeHeaderHtml(minDate, maxDate, scale, pxPerDay) {
         const monthName = current.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
         const width = (dayIndex - monthStartIdx + 1) * pxPerDay;
         const leftPos = monthStartIdx * pxPerDay;
-        topCells.push(`<div class="gantt-time-col-top" style="left:${leftPos}px;width:${width}px;">${monthName}</div>`);
+        topCells.push(`<div class="gantt-time-col-top g-tct-${monthStartIdx}">${monthName}</div>`);
+        headerCSS += `.g-tct-${monthStartIdx} { left: ${leftPos}px; width: ${width}px; }\n`;
         monthStartIdx = dayIndex + 1;
         currentMonth = next.getMonth();
         currentYear = next.getFullYear();
@@ -1862,7 +1907,8 @@ function buildTimeHeaderHtml(minDate, maxDate, scale, pxPerDay) {
     while (current <= end) {
       const left = weekIndex * pxPerDay * 7;
       const label = current.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      bottomCells.push(`<div class="gantt-time-col-bottom" style="left:${left}px;width:${pxPerDay * 7}px;">${label}</div>`);
+      bottomCells.push(`<div class="gantt-time-col-bottom g-tcb-${weekIndex}">${label}</div>`);
+      headerCSS += `.g-tcb-${weekIndex} { left: ${left}px; width: ${pxPerDay * 7}px; }\n`;
 
       const next = new Date(current);
       next.setDate(next.getDate() + 7);
@@ -1871,7 +1917,8 @@ function buildTimeHeaderHtml(minDate, maxDate, scale, pxPerDay) {
         const monthName = current.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
         const width = (weekIndex - monthStartIdx + 1) * pxPerDay * 7;
         const leftPos = monthStartIdx * pxPerDay * 7;
-        topCells.push(`<div class="gantt-time-col-top" style="left:${leftPos}px;width:${width}px;">${monthName}</div>`);
+        topCells.push(`<div class="gantt-time-col-top g-tct-${monthStartIdx}">${monthName}</div>`);
+        headerCSS += `.g-tct-${monthStartIdx} { left: ${leftPos}px; width: ${width}px; }\n`;
         monthStartIdx = weekIndex + 1;
         currentMonth = next.getMonth();
         currentYear = next.getFullYear();
@@ -1881,25 +1928,15 @@ function buildTimeHeaderHtml(minDate, maxDate, scale, pxPerDay) {
       weekIndex++;
     }
 
-    // Draw daily gridlines & weekend shade overlay for week scale
     let currentDay = new Date(start);
     let dayIndex = 0;
     while (currentDay <= end) {
       const left = dayIndex * pxPerDay;
       const isWeekend = currentDay.getDay() === 0 || currentDay.getDay() === 6;
-      const isWeekStart = currentDay.getDay() === 1; // Monday week start boundary
-      
-      let gridStyle = '';
-      if (isWeekend) {
-        gridStyle += 'background:rgba(244,63,94,0.05);';
-      }
-      if (isWeekStart) {
-        gridStyle += 'border-right:1px solid rgba(255,255,255,0.12);';
-      } else {
-        gridStyle += 'border-right:1px dashed rgba(255,255,255,0.03);';
-      }
+      const isWeekStart = currentDay.getDay() === 1;
 
-      gridLines.push(`<div class="gantt-grid-line" style="left:${left}px;width:${pxPerDay}px;${gridStyle}"></div>`);
+      gridLines.push(`<div class="gantt-grid-line g-gl-${dayIndex} ${isWeekend ? 'weekend' : ''} ${isWeekStart ? 'week-start' : 'week-mid'}"></div>`);
+      headerCSS += `.g-gl-${dayIndex} { left: ${left}px; width: ${pxPerDay}px; }\n`;
 
       currentDay.setDate(currentDay.getDate() + 1);
       dayIndex++;
@@ -1924,13 +1961,16 @@ function buildTimeHeaderHtml(minDate, maxDate, scale, pxPerDay) {
       const daysInMonth = Math.round((next - m) / 86400000);
       const width = daysInMonth * pxPerDay;
       const label = m.toLocaleDateString('en-US', { month: 'short' });
-      bottomCells.push(`<div class="gantt-time-col-bottom" style="left:${cumulativeLeft}px;width:${width}px;">${label}</div>`);
+      bottomCells.push(`<div class="gantt-time-col-bottom g-tcb-${idx}">${label}</div>`);
+      headerCSS += `.g-tcb-${idx} { left: ${cumulativeLeft}px; width: ${width}px; }\n`;
 
-      gridLines.push(`<div class="gantt-grid-line" style="left:${cumulativeLeft}px;"></div>`);
+      gridLines.push(`<div class="gantt-grid-line g-gl-${idx}"></div>`);
+      headerCSS += `.g-gl-${idx} { left: ${cumulativeLeft}px; }\n`;
 
       if (next.getFullYear() !== currentYear || idx === months.length - 1) {
         const yearWidth = cumulativeLeft + width - yearStartIdx;
-        topCells.push(`<div class="gantt-time-col-top" style="left:${yearStartIdx}px;width:${yearWidth}px;">${currentYear}</div>`);
+        topCells.push(`<div class="gantt-time-col-top g-tct-${idx}">${currentYear}</div>`);
+        headerCSS += `.g-tct-${idx} { left: ${yearStartIdx}px; width: ${yearWidth}px; }\n`;
         yearStartIdx = cumulativeLeft + width;
         currentYear = next.getFullYear();
       }
@@ -1956,9 +1996,11 @@ function buildTimeHeaderHtml(minDate, maxDate, scale, pxPerDay) {
       const width = daysInQuarter * pxPerDay;
       const qNum = Math.floor(q.getMonth() / 3) + 1;
       const label = `Q${qNum}`;
-      bottomCells.push(`<div class="gantt-time-col-bottom" style="left:${cumulativeLeft}px;width:${width}px;justify-content:center;padding:0;">${label}</div>`);
+      bottomCells.push(`<div class="gantt-time-col-bottom g-tcb-${idx} flex-justify-center-p-0">&nbsp;${label}</div>`);
+      headerCSS += `.g-tcb-${idx} { left: ${cumulativeLeft}px; width: ${width}px; }\n`;
 
-      gridLines.push(`<div class="gantt-grid-line" style="left:${cumulativeLeft}px;"></div>`);
+      gridLines.push(`<div class="gantt-grid-line g-gl-${idx}"></div>`);
+      headerCSS += `.g-gl-${idx} { left: ${cumulativeLeft}px; }\n`;
       cumulativeLeft += width;
     });
 
@@ -1973,7 +2015,8 @@ function buildTimeHeaderHtml(minDate, maxDate, scale, pxPerDay) {
 
       if (next.getFullYear() !== currentYear || idx === quarters.length - 1) {
         const yearWidth = cumulativeLeftTop + width - yearStartIdx;
-        topCells.push(`<div class="gantt-time-col-top" style="left:${yearStartIdx}px;width:${yearWidth}px;">${currentYear}</div>`);
+        topCells.push(`<div class="gantt-time-col-top g-tct-${idx}">${currentYear}</div>`);
+        headerCSS += `.g-tct-${idx} { left: ${yearStartIdx}px; width: ${yearWidth}px; }\n`;
         yearStartIdx = cumulativeLeftTop + width;
         currentYear = next.getFullYear();
       }
@@ -1984,13 +2027,14 @@ function buildTimeHeaderHtml(minDate, maxDate, scale, pxPerDay) {
   return {
     topHtml: topCells.join(''),
     bottomHtml: bottomCells.join(''),
-    gridLinesHtml: gridLines.join('')
+    gridLinesHtml: gridLines.join(''),
+    headerCSS: headerCSS
   };
 }
 
 function renderGanttTab(project, projectTasks) {
   if (projectTasks.length === 0) {
-    return `<div class="glass-panel rounded-2xl p-5 animate-slide-up" style="text-align:center;padding:64px;color:var(--text-dim);font-size:13px">
+    return `<div class="glass-panel rounded-2xl p-5 animate-slide-up gantt-empty-view-card">
       No tasks available to chart. Click 'Task Checklist' tab to add tasks.
     </div>`;
   }
@@ -2038,31 +2082,32 @@ function renderGanttTab(project, projectTasks) {
   const headerHeight = 44;
 
   const headers = buildTimeHeaderHtml(minDate, maxDate, state.ganttScale, pxPerDay);
+  setDynamicStyles('gantt-header', headers.headerCSS);
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const todayPx = (today - minDate) / 86400000 * pxPerDay;
   const showTodayLine = todayPx >= 0 && todayPx <= chartWidth;
 
-  return `<div class="glass-panel rounded-2xl p-5 space-y-4 animate-slide-up" style="overflow:hidden">
-    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
-      <div style="display:flex;align-items:center;gap:8px">
+  return `<div class="glass-panel rounded-2xl p-5 space-y-4 animate-slide-up gantt-panel-overflow-hidden">
+    <div class="flex-between-center-wrap-gap-12">
+      <div class="flex-center-gap-8">
         <h3 class="panel-title">${svgIcon('calendar')} Project Schedule</h3>
-        <button class="btn-primary" id="gantt-edit-toggle" style="font-size:11px;padding:6px 12px;border-radius:6px;display:flex;align-items:center;gap:6px;background:${state.editTimelineMode ? 'var(--brand-500)' : 'var(--slate-800)'};border:1px solid var(--slate-700)">
+        <button class="btn-primary" id="gantt-edit-toggle" class="gantt-btn-toggle">
           ${svgIcon('edit-2', 'w-3 h-3')} <span>${state.editTimelineMode ? 'Edit Mode ON' : 'Edit Timeline'}</span>
         </button>
-        <button class="btn-primary" id="gantt-cpm-toggle" style="font-size:11px;padding:6px 12px;border-radius:6px;display:flex;align-items:center;gap:6px;background:${state.showCriticalPath ? 'var(--rose-600)' : 'var(--slate-800)'};border:1px solid var(--slate-700)">
+        <button class="btn-primary" id="gantt-cpm-toggle" class="gantt-btn-toggle-cpm">
           ${svgIcon('git-commit', 'w-3 h-3')} <span>CPM Path</span>
         </button>
       </div>
-      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-        <div class="gantt-legend" style="display:flex;align-items:center;gap:12px;font-size:9px;color:var(--text-muted);background:var(--slate-900);padding:6px 12px;border-radius:8px;border:1px solid var(--slate-800);">
-          <div style="display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:2px;background:rgba(99,102,241,0.2);border:1px solid #6366f1;display:inline-block"></span><span>Summary</span></div>
-          <div style="display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:2px;background:rgba(129,0,85,0.15);border:1px solid var(--brand-500);display:inline-block"></span><span>On Track</span></div>
-          <div style="display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:2px;background:rgba(16,185,129,0.15);border:1px solid var(--emerald-500);display:inline-block"></span><span>Completed</span></div>
-          <div style="display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:2px;background:rgba(245,158,11,0.15);border:1px solid var(--amber-500);display:inline-block"></span><span>Delayed</span></div>
-          <div style="display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:2px;background:rgba(244,63,94,0.15);border:1px solid var(--rose-500);display:inline-block"></span><span>Blocked</span></div>
-          <div style="display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:2px;background:rgba(244,63,94,0.25);border:1.5px solid var(--rose-500);box-shadow:0 0 3px rgba(244,63,94,0.25);display:inline-block"></span><span>Critical</span></div>
+      <div class="flex-center-gap-16-wrap">
+        <div class="gantt-legend gantt-legend-box">
+          <div class="flex-center-gap-4"><span class="gantt-legend-dot-summary"></span><span>Summary</span></div>
+          <div class="flex-center-gap-4"><span class="gantt-legend-dot-ontrack"></span><span>On Track</span></div>
+          <div class="flex-center-gap-4"><span class="gantt-legend-dot-completed"></span><span>Completed</span></div>
+          <div class="flex-center-gap-4"><span class="gantt-legend-dot-delayed"></span><span>Delayed</span></div>
+          <div class="flex-center-gap-4"><span class="gantt-legend-dot-blocked"></span><span>Blocked</span></div>
+          <div class="flex-center-gap-4"><span class="gantt-legend-dot-critical"></span><span>Critical</span></div>
         </div>
         <div class="btn-group">
           ${['day', 'week', 'month', 'quarter'].map(s => `<button class="btn-group-item ${state.ganttScale === s ? 'active' : ''}" data-gantt-scale="${s}">${s.charAt(0).toUpperCase() + s.slice(1)}s</button>`).join('')}
@@ -2071,30 +2116,30 @@ function renderGanttTab(project, projectTasks) {
     </div>
     
     <div class="gantt-wrap" id="gantt-scroll-container">
-      <div class="gantt-scroll-spacer" style="position:absolute;top:0;left:0;width:1px;height:${headerHeight + totalTasks * rowHeight}px;pointer-events:none;"></div>
+      <div class="gantt-scroll-spacer gantt-scroll-spacer"></div>
       
-      <div class="gantt-container" style="width:${280 + chartWidth}px;">
+      <div class="gantt-container gantt-container-width">
         <div class="gantt-labels">
           <div class="gantt-header-cell">Activity Name</div>
-          <div class="gantt-visible-labels" style="position:relative;height:${totalTasks * rowHeight}px;">
+          <div class="gantt-visible-labels gantt-visible-labels-height">
           </div>
         </div>
         
         <div class="gantt-chart-area">
-          <div class="gantt-time-header" style="width:${chartWidth}px;">
-            <div class="gantt-time-header-top" style="position:relative;height:22px;width:${chartWidth}px;border-bottom:1px solid var(--slate-850);display:flex;align-items:center;">
+          <div class="gantt-time-header gantt-time-header-width">
+            <div class="gantt-time-header-top gantt-time-header-top-row">
               ${headers.topHtml}
             </div>
-            <div class="gantt-time-header-bottom" style="position:relative;height:22px;width:${chartWidth}px;display:flex;align-items:center;">
+            <div class="gantt-time-header-bottom gantt-time-header-bottom-row">
               ${headers.bottomHtml}
             </div>
           </div>
           
-          <div class="gantt-grid-lines" style="position:absolute;top:${headerHeight}px;left:0;width:${chartWidth}px;height:${totalTasks * rowHeight}px;pointer-events:none;">
+          <div class="gantt-grid-lines gantt-grid-lines-area">
             ${headers.gridLinesHtml}
           </div>
           
-          <svg class="gantt-svg-overlay" style="width:${chartWidth}px;height:${totalTasks * rowHeight}px;pointer-events:none;">
+          <svg class="gantt-svg-overlay gantt-svg-overlay-size">
             <defs>
               <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
                 <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="var(--slate-400)" />
@@ -2109,11 +2154,11 @@ function renderGanttTab(project, projectTasks) {
             <g class="gantt-svg-paths"></g>
           </svg>
           
-          <div class="gantt-visible-bars" style="position:relative;height:${totalTasks * rowHeight}px;width:${chartWidth}px;">
+          <div class="gantt-visible-bars gantt-visible-bars-area">
           </div>
 
           ${showTodayLine ? `
-          <div class="gantt-today-line" style="left:${todayPx}px;top:0;height:${headerHeight + totalTasks * rowHeight}px;">
+          <div class="gantt-today-line gantt-today-line-position">
             <span class="gantt-today-label">Today</span>
           </div>` : ''}
         </div>
@@ -2125,6 +2170,7 @@ function renderGanttTab(project, projectTasks) {
 function initGanttViewEvents() {
   const vc = document.getElementById('view-container');
   if (!vc) return;
+  const rowHeight = 40;
 
   const project = state.projects.find(p => p.ID === state.activeProjectId);
   if (!project) return;
@@ -2140,7 +2186,9 @@ function initGanttViewEvents() {
 
   const allDates = projectTasks.flatMap(t => [t.PlannedStartDate, t.PlannedEndDate]).filter(Boolean).map(d => new Date(d));
   let minDate = allDates.length > 0 ? new Date(Math.min(...allDates)) : new Date();
+  let maxDate = allDates.length > 0 ? new Date(Math.max(...allDates)) : new Date();
   minDate.setHours(0, 0, 0, 0);
+  maxDate.setHours(23, 59, 59, 999);
 
   let paddingDays = 14;
   if (state.ganttScale === 'day') paddingDays = 7;
@@ -2148,6 +2196,7 @@ function initGanttViewEvents() {
   else if (state.ganttScale === 'month') paddingDays = 90;
   else if (state.ganttScale === 'quarter') paddingDays = 180;
   minDate.setDate(minDate.getDate() - paddingDays);
+  maxDate.setDate(maxDate.getDate() + paddingDays);
 
   if (state.ganttScale === 'week') {
     minDate.setDate(minDate.getDate() - minDate.getDay());
@@ -2163,6 +2212,44 @@ function initGanttViewEvents() {
   else if (state.ganttScale === 'week') pxPerDay = 8;
   else if (state.ganttScale === 'month') pxPerDay = 2.5;
   else if (state.ganttScale === 'quarter') pxPerDay = 0.8;
+
+  // Calculate chart width
+  const totalDays = Math.max(1, Math.round((maxDate - minDate) / 86400000));
+  const chartWidth = totalDays * pxPerDay;
+
+  // Generate Gantt layout dynamic styles
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayPx = (today - minDate) / 86400000 * pxPerDay;
+
+  let ganttStyles = projectTasks.map((t, i) => {
+    const start = new Date(t.PlannedStartDate);
+    const end = new Date(t.PlannedEndDate);
+    const leftPx = (start - minDate) / 86400000 * pxPerDay;
+    const widthPx = Math.max(12, (end - start) / 86400000 * pxPerDay);
+    const level = String(t.ID).split('.').length - 1;
+    const cleanId = t.ID.replace(/\./g, '-');
+    return `
+      .gantt-row-idx-${i} { top: ${i * rowHeight}px; }
+      .gantt-label-idx-${i} { top: ${i * rowHeight}px; padding-left: ${16 + level * 12}px; }
+      .gantt-bar-task-${cleanId} { left: ${leftPx}px; width: ${widthPx}px; }
+      .gantt-fill-task-${cleanId} { width: ${t.Progress || 0}%; }
+      .gantt-bar-label-task-${cleanId} { left: ${leftPx + widthPx + 8}px; }
+    `;
+  }).join('\n');
+
+  const contentHeight = projectTasks.length * rowHeight + 44;
+  ganttStyles += `\n.gantt-today-line { left: ${todayPx}px; height: ${contentHeight}px; }`;
+  ganttStyles += `\n.gantt-wrap { height: ${contentHeight + 24}px; max-height: 750px; }`;
+  ganttStyles += `\n.gantt-scroll-spacer { height: ${contentHeight}px; width: ${chartWidth + 280}px; }`;
+  ganttStyles += `\n.gantt-container-width { width: ${chartWidth + 280}px; }`;
+  ganttStyles += `\n.gantt-time-header-width { width: ${chartWidth}px; }`;
+  ganttStyles += `\n.gantt-visible-labels { height: ${projectTasks.length * rowHeight}px; }`;
+  ganttStyles += `\n.gantt-visible-bars { height: ${projectTasks.length * rowHeight}px; width: ${chartWidth}px; }`;
+  ganttStyles += `\n.gantt-grid-lines { height: ${projectTasks.length * rowHeight}px; width: ${chartWidth}px; }`;
+  ganttStyles += `\n.gantt-svg-overlay { height: ${projectTasks.length * rowHeight}px; width: ${chartWidth}px; }`;
+
+  setDynamicStyles('gantt-layout', ganttStyles);
 
   const cpm = calculateCriticalPath(project.ID);
 
@@ -2265,9 +2352,9 @@ function initGanttViewEvents() {
         const level = String(t.ID).split('.').length - 1;
         const isCrit = state.showCriticalPath && cpm.criticalTaskIds.has(t.ID);
         labelsHtml.push(`
-          <div class="gantt-task-label" style="top:${i * rowHeight}px;padding-left:${16 + level * 12}px;${isCrit ? 'border-left:3px solid var(--rose-500);' : ''}" data-task-id="${t.ID}">
-            <span style="font-size:10px;color:var(--text-dim);margin-right:6px">${escHtml(t.ID)}</span>
-            <span style="color:${isCrit ? 'var(--rose-400)' : 'var(--text-secondary)'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(t.Name)}</span>
+          <div class="gantt-task-label gantt-label-idx-${i} ${isCrit ? 'critical-border' : ''}" data-task-id="${t.ID}">
+            <span class="gantt-label-id mr-6px">${escHtml(t.ID)}</span>
+            <span class="gantt-label-name ${isCrit ? 'critical-text' : 'normal-text'}">${escHtml(t.Name)}</span>
           </div>
         `);
       }
@@ -2296,17 +2383,16 @@ function initGanttViewEvents() {
         const editableClass = state.editTimelineMode ? 'editable' : '';
 
         barsHtml.push(`
-          <div class="gantt-bar-row" style="top:${i * rowHeight}px;">
-            <div class="gantt-bar ${editableClass} ${isCrit ? 'critical' : ''}" 
-                 style="left:${leftPx}px;width:${widthPx}px;background:${barBg};border-color:${barBorder};" 
+          <div class="gantt-bar-row gantt-row-idx-${i}">
+            <div class="gantt-bar ${editableClass} ${isCrit ? 'critical' : ''} ${t.Status} gantt-bar-task-${t.ID.replace(/\./g, '-')}" 
                  data-task-id="${t.ID}" 
                  title="${escHtml(t.Name)}: ${t.Progress}% (${formatDate(t.PlannedStartDate)} – ${formatDate(t.PlannedEndDate)})">
               ${state.editTimelineMode ? '<div class="gantt-handle-left"></div>' : ''}
-              <div class="gantt-bar-fill" style="width:${t.Progress || 0}%;background:${fillBg}"></div>
+              <div class="gantt-bar-fill gantt-fill-task-${t.ID.replace(/\./g, '-')}"></div>
               ${widthPx > 45 ? `<span class="gantt-bar-text">${t.Progress}%</span>` : ''}
               ${state.editTimelineMode ? '<div class="gantt-handle-right"></div>' : ''}
             </div>
-            <span class="gantt-bar-label" style="left:${leftPx + widthPx + 8}px;">
+            <span class="gantt-bar-label gantt-bar-label-task-${t.ID.replace(/\./g, '-')}">
               ${t.Progress}% • ${escHtml(t.Assignee || 'Unassigned')}
             </span>
           </div>
@@ -2433,11 +2519,10 @@ function initGanttViewEvents() {
 
       const tooltip = document.createElement('div');
       tooltip.className = 'gantt-drag-tooltip';
-      tooltip.style.left = (e.clientX + 15) + 'px';
-      tooltip.style.top = (e.clientY + 15) + 'px';
+      setDynamicStyles('gantt-tooltip', `.gantt-drag-tooltip { left: ${e.clientX + 15}px !important; top: ${e.clientY + 15}px !important; }`);
       tooltip.innerText = `${formatDate(initialStart)} – ${formatDate(initialEnd)} (${Math.max(1, Math.round(initialDur / 86400000))} days)`;
       document.body.appendChild(tooltip);
-      document.body.style.userSelect = 'none';
+      document.body.classList.add('no-select');
 
       let finalStart = initialStart;
       let finalEnd = initialEnd;
@@ -2459,20 +2544,31 @@ function initGanttViewEvents() {
 
         const calculatedDur = finalEnd - finalStart;
         tooltip.innerText = `${formatDate(finalStart)} – ${formatDate(finalEnd)} (${Math.max(1, Math.round(calculatedDur / 86400000))} days)`;
-        tooltip.style.left = (moveEvent.clientX + 15) + 'px';
-        tooltip.style.top = (moveEvent.clientY + 15) + 'px';
+        setDynamicStyles('gantt-tooltip', `.gantt-drag-tooltip { left: ${moveEvent.clientX + 15}px !important; top: ${moveEvent.clientY + 15}px !important; }`);
 
         const newLeftPx = (finalStart - minDate) / 86400000 * pxPerDay;
         const newWidthPx = Math.max(12, (finalEnd - finalStart) / 86400000 * pxPerDay);
-        bar.style.left = newLeftPx + 'px';
-        bar.style.width = newWidthPx + 'px';
+        bar.classList.add('gantt-bar-dragging');
+        if (bar.nextElementSibling && bar.nextElementSibling.classList.contains('gantt-bar-label')) {
+          bar.nextElementSibling.classList.add('gantt-bar-label-dragging');
+        }
+        setDynamicStyles('gantt-dragging', `
+          .gantt-bar-dragging { left: ${newLeftPx}px !important; width: ${newWidthPx}px !important; }
+          .gantt-bar-label-dragging { left: ${newLeftPx + newWidthPx + 8}px !important; }
+        `);
       };
 
       const onMouseUp = () => {
         window.removeEventListener('mousemove', onMouseMove);
         window.removeEventListener('mouseup', onMouseUp);
         tooltip.remove();
-        document.body.style.userSelect = '';
+        clearDynamicStyles('gantt-tooltip');
+        clearDynamicStyles('gantt-dragging');
+        document.body.classList.remove('no-select');
+        bar.classList.remove('gantt-bar-dragging');
+        if (bar.nextElementSibling && bar.nextElementSibling.classList.contains('gantt-bar-label')) {
+          bar.nextElementSibling.classList.remove('gantt-bar-label-dragging');
+        }
 
         t.PlannedStartDate = new Date(finalStart).toISOString().split('T')[0];
         t.PlannedEndDate = new Date(finalEnd).toISOString().split('T')[0];
@@ -2493,6 +2589,11 @@ function initGanttViewEvents() {
 }
 
 function renderTasksTab(project, projectTasks) {
+  const taskProgressCSS = projectTasks.map(t => {
+    return `.task-fill-${t.ID.replace(/\./g, '-')} { width: ${t.Progress || 0}%; }`;
+  }).join('\n');
+  setDynamicStyles('task-progress-fills', taskProgressCSS);
+
   const assignees = [...new Set(projectTasks.map(t => t.Assignee).filter(Boolean))];
   const filtered = projectTasks.filter(t => state.taskAssigneeFilter ? t.Assignee === state.taskAssigneeFilter : true);
 
@@ -2506,7 +2607,7 @@ function renderTasksTab(project, projectTasks) {
     else if (t.Status === 'delayed') { sClass = 'badge badge-delayed'; statusCol = 'var(--amber-500)'; borderCol = 'var(--amber-500)'; }
     else if (t.Status === 'blocked') { sClass = 'badge badge-rose'; statusCol = 'var(--rose-500)'; borderCol = 'var(--rose-500)'; }
 
-    const horizontalConnector = level > 0 ? `<div class="checklist-connector-line" style="width: 16px; left: -16px;"></div>` : '';
+    const horizontalConnector = level > 0 ? `<div class="checklist-connector-line auto-style-width-16px-left-16px-1022"></div>` : '';
     const isCompleted = t.Status === 'completed';
 
     // Collapsible Logic
@@ -2519,8 +2620,8 @@ function renderTasksTab(project, projectTasks) {
     const isCollapsed = state.collapsedTasks && state.collapsedTasks.includes(t.ID);
     const toggleIcon = isCollapsed ? svgIcon('chevron-right', 'w-4 h-4 collapse-toggle-icon') : svgIcon('chevron-down', 'w-4 h-4 collapse-toggle-icon');
     const toggleButton = hasChildren
-      ? `<button class="task-collapse-btn" data-task-id="${escHtml(t.ID)}" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;margin-right:6px">${toggleIcon}</button>`
-      : `<div style="width:16px;height:16px;display:flex;align-items:center;justify-content:center;margin-right:6px"><span class="dot-spacer" style="width:4px;height:4px;border-radius:50%;background:var(--slate-700)"></span></div>`;
+      ? `<button class="task-collapse-btn auto-style-background-none-border-none-color-var-cu-1023" data-task-id="${escHtml(t.ID)}">${toggleIcon}</button>`
+      : `<div class="auto-style-width-16px-height-16px-display-flex-alig-1024"><span class="dot-spacer auto-style-width-4px-height-4px-border-radius-50-ba-1025"></span></div>`;
 
     let isHidden = false;
     const parts = String(t.ID).split('.');
@@ -2534,17 +2635,17 @@ function renderTasksTab(project, projectTasks) {
 
     if (isHidden) return '';
 
-    return `<div class="checklist-card" data-task-id="${escHtml(t.ID)}" style="margin-left: ${level * 24}px; border-left-color: ${borderCol}">
+    return `<div class="checklist-card task-indent-${level} ${t.Status || 'default-status'}" data-task-id="${escHtml(t.ID)}">
       ${horizontalConnector}
       <div class="checklist-card-main">
-        <div style="display:flex;align-items:center;gap:12px;margin-right:12px">
+        <div class="auto-style-display-flex-align-items-center-gap-12px-1026">
           <!-- Started Checkbox (Redesigned) -->
           <label class="checklist-check-item-container" title="Mark Started">
             <div class="checklist-check-wrapper">
               <input type="checkbox" ${t.ActualStartDate ? 'checked' : ''} class="task-start-check" data-task-id="${escHtml(t.ID)}">
               <span class="checklist-checkbox-custom">${svgIcon('play', 'w-2.5 h-2.5')}</span>
             </div>
-            <span style="font-size:8px;color:var(--text-dim);font-weight:600;text-transform:uppercase;letter-spacing:0.04em;margin-top:2px">Started</span>
+            <span class="auto-style-font-size-8px-color-var-font-weight-600--1027">Started</span>
           </label>
           <!-- Completed Checkbox (Redesigned) -->
           <label class="checklist-check-item-container" title="Mark Completed">
@@ -2552,19 +2653,19 @@ function renderTasksTab(project, projectTasks) {
               <input type="checkbox" ${t.ActualEndDate ? 'checked' : ''} class="task-complete-check" data-task-id="${escHtml(t.ID)}">
               <span class="checklist-checkbox-custom">${svgIcon('check', 'w-2.5 h-2.5')}</span>
             </div>
-            <span style="font-size:8px;color:var(--text-dim);font-weight:600;text-transform:uppercase;letter-spacing:0.04em;margin-top:2px">Done</span>
+            <span class="auto-style-font-size-8px-color-var-font-weight-600--1027">Done</span>
           </label>
         </div>
         <div class="checklist-info">
-          <div class="checklist-header-info" style="display:flex;align-items:center;">
+          <div class="checklist-header-info checklist-header-info-group">
             ${toggleButton}
-            <span class="checklist-id" style="margin-right:6px">${escHtml(t.ID)}</span>
+            <span class="checklist-id mr-6px">${escHtml(t.ID)}</span>
             <span class="checklist-name">${escHtml(t.Name)}</span>
           </div>
           <div class="checklist-meta">
             <span class="checklist-meta-item">${svgIcon('user')} ${escHtml(t.Assignee || 'Unassigned')}</span>
             <span class="checklist-meta-item">${svgIcon('calendar')} ${formatDate(t.PlannedStartDate)} – ${formatDate(t.PlannedEndDate)}</span>
-            ${t.DaysDelayed > 0 && !t.ActualEndDate ? `<span class="checklist-meta-item" style="color:var(--rose-400)">${svgIcon('alert-triangle')} ${t.DaysDelayed}d ongoing</span>` : ''}
+            ${t.DaysDelayed > 0 && !t.ActualEndDate ? `<span class="checklist-meta-item auto-style-color-var-1009">${svgIcon('alert-triangle')} ${t.DaysDelayed}d ongoing</span>` : ''}
           </div>
         </div>
       </div>
@@ -2572,7 +2673,7 @@ function renderTasksTab(project, projectTasks) {
         <div class="checklist-progress-wrapper">
           <span class="checklist-progress-text">${t.Progress || 0}%</span>
           <div class="checklist-progress-bar-track">
-            <div class="checklist-progress-bar-fill" style="width: ${t.Progress || 0}%; background-color: ${statusCol}"></div>
+            <div class="checklist-progress-bar-fill ${t.Status || 'default-status'} task-fill-${t.ID.replace(/\./g, '-')}" class="h-full border-radius-999px"></div>
           </div>
         </div>
         <div class="checklist-buttons">
@@ -2581,12 +2682,12 @@ function renderTasksTab(project, projectTasks) {
         </div>
       </div>
     </div>`;
-  }).join('') : `<div style="text-align:center;padding:40px;color:var(--text-dim);font-size:12px;background:rgba(28,6,23,0.3);border:1px dashed var(--slate-850);border-radius:var(--r-xl)">No tasks logged. Add activity items using '+ Add Task' button.</div>`;
+  }).join('') : `<div class="auto-style-text-align-center-padding-40px-color-var-1028">No tasks logged. Add activity items using '+ Add Task' button.</div>`;
 
   return `<div class="glass-panel rounded-2xl p-5 space-y-4 animate-slide-up">
-    <div style="display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;align-items:center">
-      <div style="display:flex;align-items:center;gap:12px">
-        <span style="font-size:11px;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.08em">Checklist:</span>
+    <div class="flex-wrap-gap-16-between-center">
+      <div class="flex-center-gap-12">
+        <span class="auto-style-font-size-11px-color-var-font-weight-700-1029">Checklist:</span>
         <div class="filter-select-wrap">${svgIcon('user')}
           <select id="task-assignee-filter">
             <option value="">Filter by Assignee</option>
@@ -2635,11 +2736,11 @@ function validateSRFChronology(srfItem) {
 function renderSRFTab(project, projectSRFs) {
   if (projectSRFs.length === 0) {
     return `<div class="glass-panel rounded-2xl p-5 animate-slide-up">
-      <div style="text-align:center;padding:80px;background:rgba(28,6,23,0.3);border:1px dashed var(--slate-800);border-radius:var(--r-2xl)">
+      <div class="kaizen-empty-panel">
         ${svgIcon('file-spreadsheet', 'w-12 h-12')}
-        <h3 style="color:white;font-size:15px;font-weight:700;margin-top:12px">No SRF documents linked</h3>
-        <p style="color:var(--text-dim);font-size:12px;margin-top:4px">No linked GITL SRF documents. Click 'Add SRF Document' to initiate tracking.</p>
-        <button class="btn-danger" id="add-srf-btn" style="margin-top:20px">${svgIcon('plus')} Add SRF Document</button>
+        <h3 class="kaizen-empty-title">No SRF documents linked</h3>
+        <p class="kaizen-empty-desc">No linked GITL SRF documents. Click 'Add SRF Document' to initiate tracking.</p>
+        <button class="btn-danger" id="add-srf-btn" class="mt-20px">${svgIcon('plus')} Add SRF Document</button>
       </div>
     </div>`;
   }
@@ -2678,50 +2779,58 @@ function renderSRFTab(project, projectSRFs) {
   }).join('');
 
   return `<div class="glass-panel rounded-2xl p-5 space-y-6 animate-slide-up">
-    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;padding-bottom:16px;border-bottom:1px solid rgba(59,17,48,0.8)">
-      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px">
-        <span style="font-size:11px;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.08em;margin-right:8px">Select SRF Item:</span>
+    <div class="auto-style-display-flex-justify-content-space-betwe-1030">
+      <div class="flex-wrap-center-gap-8">
+        <span class="auto-style-font-size-11px-color-var-font-weight-700-1031">Select SRF Item:</span>
         ${srfPills}
       </div>
       <button class="btn-danger" id="add-srf-btn">${svgIcon('plus')} Add SRF Document</button>
     </div>
 
-    <div class="timeline-block" style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;padding:20px;font-size:13px">
-      <div><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600">Development Descriptor</div><div style="font-weight:600;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${escHtml(srfItem.Developments || 'N/A')}</div></div>
-      <div><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600">Requester User</div><div style="font-weight:600;color:var(--text-secondary)">${escHtml(srfItem.User || 'N/A')}</div></div>
-      <div><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600">Est. Mandays (FC/TC)</div><div style="font-weight:600;color:var(--text-secondary)">${srfItem.MandaysFC} FC + ${srfItem.MandaysTC} TC = <strong style="color:var(--text-primary)">${srfItem.TotalMandays} Total</strong></div></div>
-      <div><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.08em;font-weight:600">Development Cost (INR)</div><div style="font-weight:700;color:var(--emerald-400)">${escHtml(formatCurrency(srfItem.Cost))}</div></div>
-      <div style="grid-column:1/-1;padding-top:12px;border-top:1px solid var(--slate-850);display:flex;justify-content:space-between;align-items:center;font-size:12px">
-        <div style="color:var(--text-muted)">Current Phase: <span style="padding:2px 8px;background:rgba(244,63,94,0.1);border:1px solid rgba(244,63,94,0.2);color:var(--rose-400);font-weight:700;border-radius:4px;text-transform:uppercase;font-size:10px;margin-left:6px">${escHtml(srfItem.Status)}</span></div>
-        <div style="display:flex;gap:8px">
-          <button class="btn-ghost" id="edit-srf-btn" style="font-size:11px;padding:4px 8px">${svgIcon('edit-3')} Edit SRF</button>
-          <button class="btn-danger" id="delete-srf-btn" style="font-size:11px;padding:4px 8px">${svgIcon('trash-2')} Delete</button>
+    <div class="timeline-block auto-style-display-grid-grid-template-columns-repea-1032">
+      <div><div class="timeline-detail-label">Development Descriptor</div><div class="auto-style-font-weight-600-color-var-overflow-hidde-1033">${escHtml(srfItem.Developments || 'N/A')}</div></div>
+      <div><div class="timeline-detail-label">Requester User</div><div class="text-secondary-semibold">${escHtml(srfItem.User || 'N/A')}</div></div>
+      <div><div class="timeline-detail-label">Est. Mandays (FC/TC)</div><div class="text-secondary-semibold">${srfItem.MandaysFC} FC + ${srfItem.MandaysTC} TC = <strong class="auto-style-color-var-1034">${srfItem.TotalMandays} Total</strong></div></div>
+      <div><div class="timeline-detail-label">Development Cost (INR)</div><div class="auto-style-font-weight-700-color-var-1035">${escHtml(formatCurrency(srfItem.Cost))}</div></div>
+      <div class="auto-style-grid-column-1-1-padding-top-12px-border--1036">
+        <div class="text-muted">Current Phase: <span class="auto-style-padding-2px-8px-background-rgba-border-1-1037">${escHtml(srfItem.Status)}</span></div>
+        <div class="flex-gap-8">
+          <button class="btn-ghost" id="edit-srf-btn" class="btn-srf-action">${svgIcon('edit-3')} Edit SRF</button>
+          <button class="btn-danger" id="delete-srf-btn" class="btn-srf-action">${svgIcon('trash-2')} Delete</button>
         </div>
       </div>
     </div>
 
-    <div class="space-y-3" style="overflow-x:auto">
-      <h4 style="font-size:12px;font-weight:700;color:var(--text-primary);display:flex;align-items:center;gap:8px;margin-bottom:12px">${svgIcon('clock', 'w-4 h-4')} SRF Tracker (Sequential Stepper)</h4>
-      <div class="srf-pipeline-container" style="gap: 0">
+    <div class="space-y-3 overflow-x-auto">
+      <h4 class="auto-style-font-size-12px-font-weight-700-color-var-1038">${svgIcon('clock', 'w-4 h-4')} SRF Tracker (Sequential Stepper)</h4>
+      <div class="srf-pipeline-container gap-0">
         ${stepNodes}
       </div>
     </div>
 
-    ${warnings.length > 0 ? `<div style="background:rgba(244,63,94,0.1);border:1px solid rgba(244,63,94,0.2);border-radius:var(--r-xl);padding:16px;display:flex;flex-direction:column;gap:8px">
-      <h4 style="font-size:12px;font-weight:700;color:var(--rose-400);display:flex;align-items:center;gap:8px">${svgIcon('alert-triangle')} Chronological Sequencing Warnings</h4>
-      <ul style="list-style:disc;list-style-position:inside;font-size:12px;color:var(--text-secondary);display:flex;flex-direction:column;gap:4px">${warnings.map(w => `<li>${escHtml(w)}</li>`).join('')}</ul>
+    ${warnings.length > 0 ? `<div class="auto-style-background-rgba-border-1px-solid-rgba-bo-1039">
+      <h4 class="auto-style-font-size-12px-font-weight-700-color-var-1040">${svgIcon('alert-triangle')} Chronological Sequencing Warnings</h4>
+      <ul class="srf-warning-list">${warnings.map(w => `<li>${escHtml(w)}</li>`).join('')}</ul>
     </div>` : ''}
   </div>`;
 }
 
 function renderKaizenTab(project, projectKaizens) {
+  const kaizenFillsCSS = projectKaizens.map(k => {
+    const steps = ['submitted', 'approved', 'in-progress', 'completed'];
+    const activeIdx = steps.indexOf(k.Status || 'submitted');
+    const progressPct = activeIdx === -1 ? 0 : Math.round((activeIdx / (steps.length - 1)) * 100);
+    return `.kaizen-fill-${k.ID} { width: ${progressPct}%; }`;
+  }).join('\n');
+  setDynamicStyles('kaizen-fills', kaizenFillsCSS);
+
   if (projectKaizens.length === 0) {
     return `<div class="glass-panel rounded-2xl p-5 animate-slide-up">
-      <div style="text-align:center;padding:80px;background:rgba(28,6,23,0.3);border:1px dashed var(--slate-800);border-radius:var(--r-2xl)">
+      <div class="kaizen-empty-panel">
         ${svgIcon('award', 'w-12 h-12')}
-        <h3 style="color:white;font-size:15px;font-weight:700;margin-top:12px">No Kaizen records linked</h3>
-        <p style="color:var(--text-dim);font-size:12px;margin-top:4px">No Kaizen initiatives have been logged for this project yet.</p>
-        <button class="btn-danger" id="add-kaizen-btn" style="margin-top:20px">${svgIcon('plus')} Add Kaizen</button>
+        <h3 class="kaizen-empty-title">No Kaizen records linked</h3>
+        <p class="kaizen-empty-desc">No Kaizen initiatives have been logged for this project yet.</p>
+        <button class="btn-danger" id="add-kaizen-btn" class="mt-20px">${svgIcon('plus')} Add Kaizen</button>
       </div>
     </div>`;
   }
@@ -2756,26 +2865,26 @@ function renderKaizenTab(project, projectKaizens) {
         <div class="kaizen-card-title">${escHtml(k.Title)}</div>
         <div class="kaizen-card-badge-group">
           <span class="kaizen-grade-badge">Grade ${escHtml(k.Grade)}</span>
-          <span style="font-size:10px;color:var(--text-muted)">ID: ${escHtml(k.ID)}</span>
+          <span class="proj-progress-label">ID: ${escHtml(k.ID)}</span>
         </div>
       </div>
       <div class="kaizen-pipeline-wrapper">
         <div class="kaizen-pipeline-container">
           <div class="kaizen-pipeline-line"></div>
-          <div class="kaizen-pipeline-progress-line" style="width: ${progressPct}%"></div>
+          <div class="kaizen-pipeline-progress-line kaizen-fill-${k.ID}"></div>
           ${pipelineSteps}
         </div>
       </div>
       <div class="kaizen-card-actions">
-        <button class="btn-ghost kaizen-edit-btn" data-kaizen-id="${escHtml(k.ID)}" style="font-size:11px;padding:4px 8px">${svgIcon('edit-3')} Edit</button>
-        <button class="btn-danger kaizen-delete-btn" data-kaizen-id="${escHtml(k.ID)}" style="font-size:11px;padding:4px 8px">${svgIcon('trash-2')} Delete</button>
+        <button class="btn-ghost kaizen-edit-btn" data-kaizen-id="${escHtml(k.ID)}" class="btn-srf-action">${svgIcon('edit-3')} Edit</button>
+        <button class="btn-danger kaizen-delete-btn" data-kaizen-id="${escHtml(k.ID)}" class="btn-srf-action">${svgIcon('trash-2')} Delete</button>
       </div>
     </div>`;
   }).join('');
 
   return `<div class="glass-panel rounded-2xl p-5 space-y-6 animate-slide-up">
-    <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:16px;border-bottom:1px solid rgba(59,17,48,0.8)">
-      <h3 style="font-size:14px;font-weight:700;color:white;display:flex;align-items:center;gap:8px">${svgIcon('award')} Kaizen Improvement Initiatives</h3>
+    <div class="auto-style-display-flex-justify-content-space-betwe-1041">
+      <h3 class="kaizen-panel-title-large">${svgIcon('award')} Kaizen Improvement Initiatives</h3>
       <button class="btn-primary" id="add-kaizen-btn">${svgIcon('plus')} Add Kaizen</button>
     </div>
     <div class="kaizen-log-container">
@@ -2799,59 +2908,81 @@ function renderTeam(container) {
     return { ...member, projects: assignedProjects, projectCount: assignedProjects.length, totalTasks: memberTasks.length, completedTasks, activeTasks };
   }).sort((a, b) => b.projectCount - a.projectCount);
 
+  const teamProgressFillsCSS = teamList.map(m => {
+    const cleanName = m.name.replace(/\s+/g, '-').toLowerCase();
+    const pct = m.totalTasks > 0 ? Math.round((m.completedTasks / m.totalTasks) * 100) : 0;
+    return `.team-progress-${cleanName} { width: ${pct}%; }`;
+  }).join('\n');
+  setDynamicStyles('team-progress-fills', teamProgressFillsCSS);
+
   const chartHeight = 160;
   const maxProjCount = Math.max(1, ...teamList.map(t => t.projectCount));
 
-  const gridLines = [0, 0.25, 0.5, 0.75, 1].map(ratio => {
-    const val = Math.round(maxProjCount * ratio);
+  const teamGridCSS = [0, 0.25, 0.5, 0.75, 1].map((ratio, idx) => {
     const bottomPos = ratio * chartHeight + 32;
-    return `<div style="position:absolute;width:100%;border-top:1px solid rgba(59,17,48,0.4);bottom:${bottomPos}px;display:flex;justify-content:flex-end;padding-right:16px;font-size:9px;color:var(--text-dim);font-weight:700">
+    return `.team-gridline-${idx} { bottom: ${bottomPos}px; }`;
+  }).join('\n');
+  setDynamicStyles('team-gridlines', teamGridCSS);
+
+  const gridLines = [0, 0.25, 0.5, 0.75, 1].map((ratio, idx) => {
+    const val = Math.round(maxProjCount * ratio);
+    return `<div class="team-chart-gridline team-gridline-${idx}">
       <span>${val} ${val === 1 ? 'Project' : 'Projects'}</span>
     </div>`;
   }).join('');
 
   const solidColors = ['var(--brand-500)', 'var(--emerald-500)', '#a855f7'];
-  const bars = teamList.slice(0, 10).map((m, i) => {
+  const teamBarWidthCSS = `.team-bar-item { width: ${100 / Math.min(10, teamList.length)}%; }`;
+  const teamBarsHeightCSS = teamList.slice(0, 10).map((m, i) => {
     const barH = Math.max(8, (m.projectCount / maxProjCount) * chartHeight);
-    const color = solidColors[i % 3];
-    return `<div class="team-bar-item" style="width:${100 / Math.min(10, teamList.length)}%">
+    const cleanName = m.name.replace(/\s+/g, '-').toLowerCase();
+    return `.team-bar-height-${cleanName} { height: ${barH}px; }`;
+  }).join('\n');
+  setDynamicStyles('team-bars-layout', teamBarWidthCSS + '\n' + teamBarsHeightCSS);
+
+  const bars = teamList.slice(0, 10).map((m, i) => {
+    const cleanName = m.name.replace(/\s+/g, '-').toLowerCase();
+    return `<div class="team-bar-item">
       <div class="team-tooltip">${m.projectCount} Projects | ${m.totalTasks} Tasks</div>
-      <div class="team-bar" style="height:${barH}px;background:${color}"></div>
+      <div class="team-bar team-bar-height-${cleanName} color-${i % 3}"></div>
       <span class="team-bar-label">${escHtml(m.name)}</span>
     </div>`;
   }).join('');
 
-  const tableRows = teamList.map(m => `<tr>
-    <td style="padding:14px 16px">
-      <div style="display:flex;align-items:center;gap:10px">
+  const tableRows = teamList.map(m => {
+    const cleanName = m.name.replace(/\s+/g, '-').toLowerCase();
+    return `<tr>
+    <td class="table-padding-standard">
+      <div class="flex-center-gap-10">
         <div class="member-avatar">${escHtml(m.name.charAt(0).toUpperCase())}</div>
-        <span style="font-weight:600;color:white">${escHtml(m.name)}</span>
+        <span class="text-white-semibold">${escHtml(m.name)}</span>
       </div>
     </td>
-    <td style="padding:14px 16px;color:var(--text-secondary);font-weight:500">${escHtml(m.role)}</td>
-    <td style="padding:14px 16px;color:var(--text-muted);text-transform:capitalize;font-weight:500">${escHtml(m.department)}</td>
-    <td style="padding:14px 16px">
-      <div style="display:flex;flex-wrap:wrap;gap:4px;max-width:300px">
-        ${m.projects.length > 0 ? m.projects.map(proj => `<span style="padding:2px 8px;background:var(--slate-800);color:var(--text-secondary);border-radius:4px;border:1px solid var(--slate-700);font-size:10px;font-weight:600">${escHtml(proj.Name)}</span>`).join('') : `<span style="color:var(--text-dim);font-style:italic;font-size:10px">No active project assignments</span>`}
+    <td class="auto-style-padding-14px-16px-color-var-font-weight--1042">${escHtml(m.role)}</td>
+    <td class="auto-style-padding-14px-16px-color-var-text-transfo-1043">${escHtml(m.department)}</td>
+    <td class="table-padding-standard">
+      <div class="flex-wrap-gap-4-max-w-300">
+        ${m.projects.length > 0 ? m.projects.map(proj => `<span class="member-assigned-project-badge">${escHtml(proj.Name)}</span>`).join('') : `<span class="auto-style-color-var-font-style-italic-font-size-10-1044">No active project assignments</span>`}
       </div>
     </td>
-    <td style="padding:14px 16px;text-align:center;font-weight:700;color:var(--text-secondary)">
-      ${m.totalTasks > 0 ? `<span style="padding:2px 10px;background:rgba(129,0,85,0.1);border:1px solid rgba(129,0,85,0.2);color:var(--brand-300);border-radius:999px;font-weight:700">${m.totalTasks}</span>` : `<span style="color:var(--text-dim)">-</span>`}
+    <td class="auto-style-padding-14px-16px-text-align-center-font-1045">
+      ${m.totalTasks > 0 ? `<span class="member-task-count-badge">${m.totalTasks}</span>` : `<span class="text-dim">-</span>`}
     </td>
-    <td style="padding:14px 16px;text-align:center">
-      ${m.totalTasks > 0 ? `<div style="display:flex;flex-direction:column;align-items:center;gap:4px">
-        <span style="color:var(--emerald-400);font-weight:600;font-size:12px">${m.completedTasks} / ${m.totalTasks}</span>
-        <div class="progress-track h-1" style="width:48px"><div class="progress-fill fill-emerald" style="height:100%;border-radius:999px;background:var(--emerald-500);width:${Math.round((m.completedTasks / m.totalTasks) * 100)}%"></div></div>
-      </div>` : `<span style="color:var(--text-dim)">-</span>`}
+    <td class="auto-style-padding-14px-16px-text-align-center-1046">
+      ${m.totalTasks > 0 ? `<div class="flex-col-center-gap-4">
+        <span class="member-completed-ratio">${m.completedTasks} / ${m.totalTasks}</span>
+        <div class="progress-track h-1 w-48px"><div class="progress-fill fill-emerald team-progress-${cleanName}"></div></div>
+      </div>` : `<span class="text-dim">-</span>`}
     </td>
-  </tr>`).join('');
+  </tr>`;
+  }).join('');
 
   container.innerHTML = `
   <div class="space-y-6 animate-fade-in">
     <div class="glass-panel rounded-2xl p-5 space-y-4">
       <h3 class="panel-title">${svgIcon('award')} Project Allocation Workload Chart</h3>
       <div class="team-chart-container">
-        <div class="team-chart-bars" style="min-width:600px">
+        <div class="team-chart-bars min-w-600px">
           ${gridLines}
           ${bars}
         </div>
@@ -2859,10 +2990,10 @@ function renderTeam(container) {
     </div>
     <div class="glass-panel rounded-2xl p-5 space-y-4">
       <h3 class="panel-title">${svgIcon('users')} Resource Directory &amp; Portfolio Index</h3>
-      <div style="overflow-x:auto;border:1px solid rgba(43,11,35,0.8);border-radius:var(--r-xl)">
+      <div class="table-scroll-wrapper">
         <table class="team-table">
           <thead><tr>
-            <th>Member Name</th><th>Role Descriptor</th><th>Department</th><th>Assigned Projects</th><th style="text-align:center">Tasks Load</th><th style="text-align:center">Completed</th>
+            <th>Member Name</th><th>Role Descriptor</th><th>Department</th><th>Assigned Projects</th><th class="auto-style-text-align-center-1047">Tasks Load</th><th class="auto-style-text-align-center-1047">Completed</th>
           </tr></thead>
           <tbody>${tableRows}</tbody>
         </table>
@@ -2878,9 +3009,9 @@ function renderEmpty(container) {
   container.innerHTML = `
   <div class="empty-state">
     <div class="empty-icon">${svgIcon('file-spreadsheet')}</div>
-    <div style="text-align:center;display:flex;flex-direction:column;gap:8px">
-      <h3 style="color:white;font-size:16px;font-weight:700">No Project Database Loaded</h3>
-      <p style="color:var(--text-muted);font-size:12px;line-height:1.6">This management tracker relies on local spreadsheet data. Import your project tracking database (.xlsx) to analyze dashboards, timelines, and checklists.</p>
+    <div class="center-column-gap-8">
+      <h3 class="setup-panel-title">No Project Database Loaded</h3>
+      <p class="setup-panel-desc">This management tracker relies on local spreadsheet data. Import your project tracking database (.xlsx) to analyze dashboards, timelines, and checklists.</p>
     </div>
     <button class="btn-primary" id="empty-import-btn">${svgIcon('upload')} Select Excel File</button>
   </div>`;
@@ -2929,11 +3060,11 @@ function openAddProjectModal() {
       <h3 class="modal-title">Create New Project</h3>
       <button class="modal-close">&times;</button>
     </div>
-    <form id="add-project-form" class="space-y-4" style="font-size:12px">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-        <div class="form-group" style="grid-column:1/-1"><label class="form-label">Project Name *</label>
+    <form id="add-project-form" class="space-y-4 fs-12px">
+      <div class="form-grid-two-col">
+        <div class="form-group form-col-span-full"><label class="form-label">Project Name *</label>
           <input type="text" name="name" required class="form-input" placeholder="e.g. Finance Ledger Automation"></div>
-        <div class="form-group" style="grid-column:1/-1"><label class="form-label">Project Description</label>
+        <div class="form-group form-col-span-full"><label class="form-label">Project Description</label>
           <textarea name="desc" rows="3" class="form-input" placeholder="Specify project scope, outputs and deliverables..."></textarea></div>
         <div class="form-group"><label class="form-label">Department *</label>
           <input type="text" name="dept" required class="form-input" list="existing-departments" placeholder="Select or type department...">
@@ -2994,11 +3125,11 @@ function openEditProjectModal() {
       <h3 class="modal-title">Edit Project Workspace</h3>
       <button class="modal-close">&times;</button>
     </div>
-    <form id="edit-project-form" class="space-y-4" style="font-size:12px">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-        <div class="form-group" style="grid-column:1/-1"><label class="form-label">Project Name *</label>
+    <form id="edit-project-form" class="space-y-4 fs-12px">
+      <div class="form-grid-two-col">
+        <div class="form-group form-col-span-full"><label class="form-label">Project Name *</label>
           <input type="text" name="name" required class="form-input" value="${escHtml(project.Name)}"></div>
-        <div class="form-group" style="grid-column:1/-1"><label class="form-label">Project Description</label>
+        <div class="form-group form-col-span-full"><label class="form-label">Project Description</label>
           <textarea name="desc" rows="3" class="form-input">${escHtml(project.Description)}</textarea></div>
         <div class="form-group"><label class="form-label">Department *</label>
           <input type="text" name="dept" required class="form-input" list="existing-departments" value="${escHtml(project.Department)}">
@@ -3018,7 +3149,7 @@ function openEditProjectModal() {
           <input type="date" name="actualStart" class="form-input" value="${escHtml(project.ActualStartDate || '')}"></div>
         <div class="form-group"><label class="form-label">Actual End Date</label>
           <input type="date" name="actualEnd" class="form-input" value="${escHtml(project.ActualEndDate || '')}"></div>
-        <div class="form-group" style="grid-column:1/-1"><label class="form-label">Project Benefits / Savings (e.g. 10 man days, ₹250000)</label>
+        <div class="form-group form-col-span-full"><label class="form-label">Project Benefits / Savings (e.g. 10 man days, ₹250000)</label>
           <input type="text" name="benefits" class="form-input" value="${escHtml(project.Benefits || '')}"></div>
       </div>
       <div class="modal-footer">
@@ -3065,15 +3196,15 @@ function openTaskModal(task) {
       <h3 class="modal-title">${isEditing ? 'Edit Checklist Task' : 'Add Checklist Task'}</h3>
       <button class="modal-close">&times;</button>
     </div>
-    <form id="task-form" class="space-y-4" style="font-size:12px">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+    <form id="task-form" class="space-y-4 fs-12px">
+      <div class="form-grid-two-col">
         <div class="form-group"><label class="form-label">Task ID * (e.g. 1, 1.1, 1.1.1)</label>
           <input type="text" name="taskId" required class="form-input" placeholder="e.g. 1.2" value="${escHtml(defaultTaskId)}"></div>
         <div class="form-group"><label class="form-label">Assignee *</label>
           <select name="assignee" class="form-input">${pmOptions}</select></div>
-        <div class="form-group" style="grid-column:1/-1"><label class="form-label">Activity Name *</label>
+        <div class="form-group form-col-span-full"><label class="form-label">Activity Name *</label>
           <input type="text" name="taskName" required class="form-input" value="${escHtml(task ? task.Name : '')}"></div>
-        <div class="form-group" style="grid-column:1/-1"><label class="form-label">Predecessors (comma-separated, e.g. 1.1, 1.2SS, 1.3FF, 1.4SF)</label>
+        <div class="form-group form-col-span-full"><label class="form-label">Predecessors (comma-separated, e.g. 1.1, 1.2SS, 1.3FF, 1.4SF)</label>
           <input type="text" name="dependencies" class="form-input" placeholder="e.g. 1.1, 1.2SS" value="${escHtml(task && task.Dependencies ? task.Dependencies : '')}"></div>
         <div class="form-group"><label class="form-label">Planned Start Date</label>
           <input type="date" name="plannedStart" class="form-input" value="${escHtml(task ? task.PlannedStartDate || '' : '')}"></div>
@@ -3083,14 +3214,14 @@ function openTaskModal(task) {
           <input type="date" name="actualStart" class="form-input" value="${escHtml(task ? task.ActualStartDate || '' : '')}"></div>
         <div class="form-group"><label class="form-label">Actual End Date</label>
           <input type="date" name="actualEnd" class="form-input" value="${escHtml(task ? task.ActualEndDate || '' : '')}"></div>
-        <div class="form-group" style="grid-column:1/-1;padding-top:12px;border-top:1px solid var(--slate-800)">
-          <h4 style="font-weight:600;color:var(--text-secondary);margin-bottom:12px;font-size:12px">Timeline Delay Documentation (Fill if delayed)</h4>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-            <div class="form-group" style="grid-column:1/-1"><label class="form-label">Reported By</label>
+        <div class="form-group auto-style-grid-column-1-1-padding-top-12px-border--1048">
+          <h4 class="form-section-title">Timeline Delay Documentation (Fill if delayed)</h4>
+          <div class="form-grid-two-col">
+            <div class="form-group form-col-span-full"><label class="form-label">Reported By</label>
               <select name="reportedBy" class="form-input">${reporterOptions}</select></div>
-            <div class="form-group" style="grid-column:1/-1"><label class="form-label">Delay Root Cause</label>
+            <div class="form-group form-col-span-full"><label class="form-label">Delay Root Cause</label>
               <input type="text" name="delayReason" class="form-input" placeholder="e.g. Server downtime, awaiting API specifications..." value="${escHtml(task ? task.DelayReason || '' : '')}"></div>
-            <div class="form-group" style="grid-column:1/-1"><label class="form-label">Downstream Impact</label>
+            <div class="form-group form-col-span-full"><label class="form-label">Downstream Impact</label>
               <input type="text" name="delayImpact" class="form-input" placeholder="e.g. Delays staging deploy, blocks UAT start..." value="${escHtml(task ? task.DelayImpact || '' : '')}"></div>
           </div>
         </div>
@@ -3229,15 +3360,15 @@ function openKaizenModal(kaizen) {
       <h3 class="modal-title">${isEditing ? 'Edit Kaizen Initiative' : 'Add Kaizen Initiative'}</h3>
       <button class="modal-close">&times;</button>
     </div>
-    <form id="kaizen-form" class="space-y-4" style="font-size:12px">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+    <form id="kaizen-form" class="space-y-4 fs-12px">
+      <div class="form-grid-two-col">
         <div class="form-group"><label class="form-label">Kaizen ID * (e.g. K1, K2)</label>
           <input type="text" name="kaizenId" required class="form-input" placeholder="e.g. K1" value="${escHtml(kaizen ? kaizen.ID : '')}" ${isEditing ? 'readonly' : ''}></div>
         <div class="form-group"><label class="form-label">Grade *</label>
           <select name="grade" class="form-input">${gradeOptions}</select></div>
-        <div class="form-group" style="grid-column:1/-1"><label class="form-label">Title / Description *</label>
+        <div class="form-group form-col-span-full"><label class="form-label">Title / Description *</label>
           <input type="text" name="title" required class="form-input" placeholder="e.g. Automate form field extraction using AI" value="${escHtml(kaizen ? kaizen.Title : '')}"></div>
-        <div class="form-group" style="grid-column:1/-1"><label class="form-label">Uploaded On (Date)</label>
+        <div class="form-group form-col-span-full"><label class="form-label">Uploaded On (Date)</label>
           <input type="date" name="uploadedOn" class="form-input" value="${escHtml(kaizen ? kaizen.UploadedOn || '' : '')}"></div>
         <div class="form-group"><label class="form-label">Approved by L+1 (Date)</label>
           <input type="date" name="approvedL1" class="form-input" value="${escHtml(kaizen ? kaizen.ApprovedL1 || '' : '')}"></div>
@@ -3301,13 +3432,13 @@ function openSRFModal(srfItem) {
       <h3 class="modal-title">${isEditing ? 'Edit SRF Contract' : 'Add SRF Contract'}</h3>
       <button class="modal-close">&times;</button>
     </div>
-    <form id="srf-form" class="space-y-4" style="font-size:12px">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+    <form id="srf-form" class="space-y-4 fs-12px">
+      <div class="form-grid-two-col">
         <div class="form-group"><label class="form-label">SRF Number *</label>
           <input type="text" name="srfNo" required class="form-input" value="${escHtml(srfItem ? srfItem.SRFNo : defaultSRFNo)}"></div>
         <div class="form-group"><label class="form-label">User (Requester) *</label>
           <input type="text" name="user" required class="form-input" value="${escHtml(srfItem ? srfItem.User : project?.ProjectManager || '')}"></div>
-        <div class="form-group" style="grid-column:1/-1"><label class="form-label">Developments Scope Description *</label>
+        <div class="form-group form-col-span-full"><label class="form-label">Developments Scope Description *</label>
           <input type="text" name="developments" required class="form-input" placeholder="e.g. Master forms integration, webhooks Callback module..." value="${escHtml(srfItem ? srfItem.Developments : '')}"></div>
         <div class="form-group"><label class="form-label">Mandays FC (Functional) *</label>
           <input type="number" name="mandaysFC" required class="form-input" value="${srfItem ? srfItem.MandaysFC : 0}"></div>
@@ -3317,13 +3448,13 @@ function openSRFModal(srfItem) {
           <input type="number" name="cost" required class="form-input" value="${srfItem ? srfItem.Cost : 0}"></div>
         <div class="form-group"><label class="form-label">Status Stage *</label>
           <select name="status" class="form-input">${statusOptions}</select></div>
-        <div class="form-group" style="grid-column:1/-1;padding-top:12px;border-top:1px solid var(--slate-800)">
-          <h4 style="font-weight:600;color:var(--text-secondary);margin-bottom:12px">Milestone Phase Dates (YYYY-MM-DD)</h4>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">${dateInputs}</div>
+        <div class="form-group auto-style-grid-column-1-1-padding-top-12px-border--1048">
+          <h4 class="form-section-title-no-fs">Milestone Phase Dates (YYYY-MM-DD)</h4>
+          <div class="form-grid-two-col">${dateInputs}</div>
         </div>
       </div>
       <div class="modal-footer">
-        <button type="submit" class="btn-primary" style="background:var(--rose-500)">Save SRF Contract</button>
+        <button type="submit" class="btn-primary btn-background-rose">Save SRF Contract</button>
       </div>
     </form>`, (modal) => {
     modal.querySelector('#srf-form').addEventListener('submit', (e) => {
@@ -3413,18 +3544,61 @@ function setupViewEvents() {
   });
 
   // Workspace events
+  console.log("Binding workspace button event listeners. activeProjectId:", state.activeProjectId);
   vc.querySelector('#ws-back-btn')?.addEventListener('click', () => navigateTo('projects'));
   vc.querySelector('#ws-edit-btn')?.addEventListener('click', openEditProjectModal);
-  vc.querySelector('#ws-delete-btn')?.addEventListener('click', () => {
-    if (window.confirm('Are you sure you want to delete this project? All associated tasks and SRFs will be deleted.')) {
-      const id = state.activeProjectId;
-      state.projects = state.projects.filter(p => p.ID !== id);
-      state.tasks = state.tasks.filter(t => t.ProjectID !== id);
-      state.srfs = state.srfs.filter(s => s.ProjectID !== id);
-      saveStateToServer(state.projects, state.tasks, state.teamMembers, state.srfs);
-      showToast('Project deleted.');
-      navigateTo(state.projects.length > 0 ? 'projects' : 'empty');
-    }
+  
+  const deleteBtn = vc.querySelector('#ws-delete-btn');
+  console.log("Delete button element found in DOM:", deleteBtn);
+  deleteBtn?.addEventListener('click', () => {
+    const project = state.projects.find(p => String(p.ID) === String(state.activeProjectId));
+    if (!project) return;
+    openModal(`
+      <div class="modal-header">
+        <h3 class="modal-title">Delete Project</h3>
+        <button class="modal-close">&times;</button>
+      </div>
+      <div class="space-y-4 fs-12px" style="padding: 20px;">
+        <p>Are you sure you want to delete the project <strong>${escHtml(project.Name)}</strong>?</p>
+        <p style="color: var(--rose-500); font-weight: 500;">This will permanently delete all associated tasks, SRF documents, and Kaizens. This action cannot be undone.</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-ghost" id="confirm-cancel-btn">Cancel</button>
+        <button type="button" class="btn-danger" id="confirm-delete-btn">Delete Project</button>
+      </div>
+    `, (modal) => {
+      modal.querySelector('#confirm-cancel-btn').addEventListener('click', closeModal);
+      modal.querySelector('#confirm-delete-btn').addEventListener('click', () => {
+        const id = String(state.activeProjectId);
+        state.projects = state.projects.filter(p => String(p.ID) !== id);
+        state.tasks = state.tasks.filter(t => String(t.ProjectID) !== id);
+        state.srfs = state.srfs.filter(s => String(s.ProjectID) !== id);
+        state.kaizens = state.kaizens.filter(k => String(k.ProjectID) !== id);
+        saveStateToServer(state.projects, state.tasks, state.teamMembers, state.srfs, state.kaizens);
+        closeModal();
+        showToast('Project deleted successfully.');
+        
+        // Show success confirmation modal
+        openModal(`
+          <div class="modal-header">
+            <h3 class="modal-title">Project Deleted</h3>
+            <button class="modal-close">&times;</button>
+          </div>
+          <div class="space-y-4 fs-12px text-center" style="padding: 20px;">
+            <div style="color: var(--emerald-500); font-size: 32px; margin-bottom: 8px;">✓</div>
+            <p>Project <strong>${escHtml(project.Name)}</strong> was successfully deleted.</p>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn-primary" id="success-ok-btn">OK</button>
+          </div>
+        `, (successModal) => {
+          successModal.querySelector('#success-ok-btn').addEventListener('click', () => {
+            closeModal();
+            navigateTo(state.projects.length > 0 ? 'projects' : 'empty');
+          });
+        });
+      });
+    });
   });
 
   vc.querySelectorAll('.tab-btn').forEach(btn => {
@@ -3659,14 +3833,13 @@ function buildSidebarHTML() {
     </nav>
   </div>
   <div class="sidebar-footer">
-    <input type="file" id="excel-import-input" accept=".xlsx,.xls" style="display:none">
+    <input type="file" id="excel-import-input" accept=".xlsx,.xls" class="display-none-class">
     <div class="sidebar-action-row">
       <button class="sidebar-action-btn" id="import-btn">${svgIcon('upload')} Import</button>
       <button class="sidebar-action-btn" id="export-btn" disabled>${svgIcon('download')} Export</button>
     </div>
     <div class="sidebar-meta">
       <span>Version 2.0.0</span>
-      <button class="theme-btn" id="theme-btn" title="Toggle Theme">${svgIcon(state.theme === 'dark' ? 'sun' : 'moon')}</button>
     </div>
   </div>`;
 }
@@ -3680,11 +3853,6 @@ function setupStaticEvents() {
     });
   });
 
-  // Theme toggle
-  document.getElementById('theme-btn')?.addEventListener('click', () => {
-    state.theme = state.theme === 'dark' ? 'light' : 'dark';
-    applyTheme();
-  });
 
   // Department filter (in header)
   document.getElementById('header-dept-filter')?.addEventListener('change', (e) => {
@@ -3778,7 +3946,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     lucide.createIcons({ nodes: [sidebar] });
   }
 
-  applyTheme();
   setupStaticEvents();
   await initDatabase();
   updateExportBtn();

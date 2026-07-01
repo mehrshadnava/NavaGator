@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en">
 
 <head>
   <meta charset="UTF-8">
@@ -35,10 +35,10 @@
     <!-- Main Panel -->
     <main class="main-panel">
       <header class="main-header" id="main-header">
-        <h1 id="main-header-title" style="margin:0">Analytical Dashboard</h1>
-        <div style="display:flex;align-items:center;gap:12px">
-          <select id="header-dept-filter" class="form-input" style="width:160px;margin-bottom:0;padding:4px 8px;font-size:11px;display:none;height:28px;border-radius:6px;cursor:pointer"></select>
-          <button class="btn-primary" id="create-project-btn" style="display:none">
+        <h1 id="main-header-title" class="main-header-title">Analytical Dashboard</h1>
+        <div class="header-actions">
+          <select id="header-dept-filter" class="form-input header-dept-filter hidden"></select>
+          <button class="btn-primary hidden" id="create-project-btn">
             <i data-lucide="plus"></i>
             <span>Create Project</span>
           </button>
