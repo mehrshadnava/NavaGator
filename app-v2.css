@@ -184,7 +184,7 @@ body {
   align-items: center;
   gap: 14px;
   padding: 10px 16px;
-  border-radius: var(--r-xl);
+  border-radius: var(--r-md);
   font-size: 12px;
   font-weight: 600;
   border: 1px solid transparent;
@@ -197,7 +197,7 @@ body {
 }
 
 .nav-btn:hover:not(:disabled) {
-  background: var(--brand-500);
+  background: var(--brand-400);
   color: white;
 }
 
@@ -209,7 +209,6 @@ body {
   background: var(--brand-500);
   border-color: var(--brand-600);
   color: white;
-  box-shadow: 0 10px 24px rgba(129, 0, 85, 0.25);
 }
 
 .nav-btn:disabled {
@@ -244,10 +243,10 @@ body {
   justify-content: center;
   gap: 6px;
   padding: 8px;
-  background: var(--slate-900);
-  border: 1px solid var(--slate-850);
+  background: var(--brand-500);
+  border: 1px solid var(--brand-500);
   border-radius: var(--r-md);
-  color: var(--text-secondary);
+  color: white;
   font-size: 10px;
   font-weight: 600;
   cursor: pointer;
@@ -1121,7 +1120,7 @@ textarea::placeholder {
 .benefit-kpi-card {
   padding: 16px;
   border-radius: var(--r-xl);
-  border: 1px solid #e8ebf2;
+
   display: flex;
   align-items: center;
   gap: 14px;
@@ -1183,9 +1182,6 @@ textarea::placeholder {
 }
 
 .benefit-breakdown {
-  border: 1px solid var(--slate-900);
-  background: #fafbfd;
-  border-radius: 16px;
   padding: 12px;
   max-height: 145px;
   overflow-y: auto;
